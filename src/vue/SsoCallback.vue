@@ -1,98 +1,50 @@
 <template>
-  <!-- 全屏绿色渐变覆盖层 -->
-  <div class="sso-cb-overlay">
+  <!-- 独立全屏页面模式（SsoCallback 是路由页面，对应 AuthTransitionCard page 模式） -->
+  <div class="sso-cb-page">
     <div class="sso-cb-card">
-      <!-- Logo：与 UCenterWeb AuthLogo variant="icon" size="lg" 保持一致 -->
-      <div class="sso-cb-logo">
-        <svg viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect width="56" height="56" rx="14" fill="url(#sso-logo-grad)" />
-          <path
-            d="M28 16a12 12 0 1 0 0 24 12 12 0 0 0 0-24zm0 4.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4z"
-            fill="white"
-            fill-opacity="0.3"
-          />
-          <circle cx="28" cy="28" r="4.8" fill="white" />
-          <defs>
-            <linearGradient
-              id="sso-logo-grad"
-              x1="0"
-              y1="0"
-              x2="56"
-              y2="56"
-              gradientUnits="userSpaceOnUse"
-            >
-              <stop stop-color="#10b981" />
-              <stop offset="1" stop-color="#3b82f6" />
-            </linearGradient>
-          </defs>
-        </svg>
-      </div>
+      <!-- Logo：对应 AuthLogo variant="icon" size="lg" -->
+      <SsoLogo size="lg" class="sso-cb-logo" />
 
-      <!-- 状态指示区：loading / success / error 三态 -->
+      <!-- 状态指示区：三态切换，动画与 AuthTransitionCard auth-tc-indicator 完全一致 -->
       <div class="sso-cb-indicator">
-        <!-- loading 态：spinner -->
-        <div v-if="status === 'loading'" class="sso-cb-spinner" />
-
-        <!-- success 态：✓ 图标 -->
-        <div v-else-if="status === 'success'" class="sso-cb-success-icon">
-          <svg
-            viewBox="0 0 52 52"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
+        <Transition name="sso-cb-indicator" mode="out-in">
+          <div
+            v-if="status === 'success'"
+            key="success"
+            class="sso-cb-success-icon"
           >
-            <circle
-              cx="26"
-              cy="26"
-              r="25"
-              stroke="#10b981"
-              stroke-width="2"
-              fill="none"
-            />
-            <path
-              d="M14 26l8 8 16-16"
-              stroke="#10b981"
-              stroke-width="3"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </div>
-
-        <!-- error 态：❌ 图标 -->
-        <div v-else-if="status === 'error'" class="sso-cb-error-icon">
-          <svg
-            viewBox="0 0 52 52"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
+            <ElIcon :size="44"><CircleCheck /></ElIcon>
+          </div>
+          <div
+            v-else-if="status === 'error'"
+            key="error"
+            class="sso-cb-error-icon"
           >
-            <circle
-              cx="26"
-              cy="26"
-              r="25"
-              stroke="#e53e3e"
-              stroke-width="2"
-              fill="none"
-            />
-            <path
-              d="M18 18l16 16M34 18l-16 16"
-              stroke="#e53e3e"
-              stroke-width="3"
-              stroke-linecap="round"
-            />
-          </svg>
-        </div>
+            <ElIcon :size="44"><CircleClose /></ElIcon>
+          </div>
+          <div v-else key="spinner" class="sso-cb-spinner"></div>
+        </Transition>
       </div>
 
-      <!-- 状态文字 -->
-      <p class="sso-cb-status-text" :class="{ 'is-error': status === 'error' }">
-        {{ statusText }}
+      <!-- 状态主文字，带上下滑动淡入淡出动画 -->
+      <Transition name="sso-cb-text" mode="out-in">
+        <p :key="statusText" class="sso-cb-text">{{ statusText }}</p>
+      </Transition>
+
+      <!-- 副文字：错误详情（对应 AuthTransitionCard subText） -->
+      <p v-if="status === 'error' && errorMsg" class="sso-cb-sub-text">
+        {{ errorMsg }}
       </p>
 
-      <!-- 错误详情 + 重试按钮（仅 error 态显示） -->
-      <template v-if="status === 'error'">
-        <p v-if="errorMsg" class="sso-cb-error-msg">{{ errorMsg }}</p>
-        <button class="sso-cb-retry-btn" @click="retry">重新登录</button>
-      </template>
+      <!-- 重试按钮（仅 error 态） -->
+      <ElButton
+        v-if="status === 'error'"
+        type="primary"
+        class="sso-cb-retry-btn"
+        @click="retry"
+      >
+        重新登录
+      </ElButton>
     </div>
   </div>
 </template>
@@ -100,7 +52,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
+import { ElIcon, ElButton } from "element-plus";
+import { CircleCheck, CircleClose } from "@element-plus/icons-vue";
 import { useSsoClient } from "./composables";
+import SsoLogo from "./SsoLogo.vue";
 
 defineOptions({ name: "SsoCallback" });
 
@@ -134,20 +89,19 @@ const client = useSsoClient();
 
 const status = ref<Status>("loading");
 const errorMsg = ref("");
+// 提前判断是否有 ticket，用于 statusText 计算
+const hasTicket = ref(false);
 
 const statusText = computed(() => {
   switch (status.value) {
     case "loading":
-      return hasTicket.value ? "正在登录，请稍候..." : "正在跳转到认证中心...";
+      return hasTicket.value ? "正在完成登录..." : "正在跳转登录...";
     case "success":
       return "登录成功，即将跳转...";
     case "error":
-      return "SSO 登录失败";
+      return "登录失败";
   }
 });
-
-// 提前判断是否有 ticket，用于 statusText 计算
-const hasTicket = ref(false);
 
 // ---- 核心逻辑 ----
 async function handleCallback() {
@@ -166,8 +120,8 @@ async function handleCallback() {
       // 切换为成功态
       status.value = "success";
 
-      // 等待 400ms 展示成功状态，再执行跳转
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      // 短暂展示成功状态后跳转
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // 确定跳转目标：back 解码后若指向登录页则兜底跳首页
       const target = back ? decodeURIComponent(back) : "/";
@@ -176,7 +130,7 @@ async function handleCallback() {
       // 无 ticket：跳转到认证中心
       const target = back ? decodeURIComponent(back) : undefined;
       await client.goSsoLogin(target);
-      // goSsoLogin 会执行 window.location.href，页面已离开，以下代码不会运行
+      // goSsoLogin 执行 window.location.href，页面已离开，以下代码不会运行
     }
   } catch (e: any) {
     status.value = "error";
@@ -203,71 +157,66 @@ function retry() {
 }
 
 onMounted(() => {
+  // 优先应用主题，确保加载动画在正确的明/暗模式下渲染
+  const theme = route.query.theme as string | undefined;
+  if (theme === "dark") {
+    document.documentElement.classList.add("dark");
+  } else if (theme === "light") {
+    document.documentElement.classList.remove("dark");
+  }
   handleCallback();
 });
 </script>
 
 <style scoped>
-/* ---- 全屏覆盖层：与 UCenterWeb oauth-overlay 完全一致的配色 ---- */
-.sso-cb-overlay {
-  position: fixed;
-  inset: 0;
+/*
+ * 所有颜色均使用 Element Plus CSS 变量，与 AuthTransitionCard 完全一致。
+ * 消费方加载 EP（含暗黑主题）后自动跟随；未加载 EP 时 fallback 值生效。
+ */
+
+/* ---- 独立全屏页面（对应 AuthTransitionCard .auth-tc-page） ---- */
+.sso-cb-page {
   display: flex;
-  align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 50%, #d1fae5 100%);
+  align-items: center;
+  height: 100vh;
+  background: linear-gradient(
+    135deg,
+    var(--el-color-primary-light-9, #f0fdf4) 0%,
+    var(--el-fill-color-blank, #ffffff) 100%
+  );
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
     "Microsoft YaHei", sans-serif;
-  z-index: 9999;
 }
 
-/* ---- 中央卡片：毛玻璃 + 绿色描边，与 UCenterWeb oauth-overlay-card 一致 ---- */
+/* ---- 卡片（对应 AuthTransitionCard .auth-tc-card） ---- */
 .sso-cb-card {
-  box-sizing: border-box;
   text-align: center;
   width: 300px;
   padding: 40px 48px;
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--el-bg-color, #ffffff);
   border-radius: 20px;
   backdrop-filter: blur(20px);
   box-shadow:
-    0 8px 32px rgba(16, 185, 129, 0.08),
-    0 0 0 1px rgba(16, 185, 129, 0.05);
-  border: 1px solid rgba(16, 185, 129, 0.1);
-  animation: sso-card-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    0 8px 32px
+      color-mix(in srgb, var(--el-color-primary, #10b981) 8%, transparent),
+    0 0 0 1px
+      color-mix(in srgb, var(--el-color-primary, #10b981) 5%, transparent);
+  border: 1px solid var(--el-border-color-light, #e5e7eb);
+  box-sizing: border-box;
 }
 
-@keyframes sso-card-in {
-  from {
-    opacity: 0;
-    transform: scale(0.88) translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
-/* ---- Logo：与 UCenterWeb oauth-overlay-logo 一致（56×56 圆角方块图标） ---- */
+/* ---- Logo（对应 .auth-tc-logo） ---- */
 .sso-cb-logo {
-  width: 56px;
-  height: 56px;
   margin: 0 auto 20px;
 }
 
-.sso-cb-logo svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-  border-radius: 14px;
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
-}
-
-/* ---- 状态指示区：与 UCenterWeb oauth-overlay-indicator 同尺寸同间距 ---- */
+/* ---- 指示器容器（对应 .auth-tc-indicator） ---- */
 .sso-cb-indicator {
   width: 44px;
   height: 44px;
+  flex-shrink: 0;
   margin: 0 auto 16px;
   position: relative;
   display: flex;
@@ -275,108 +224,122 @@ onMounted(() => {
   justify-content: center;
 }
 
-/* Spinner：border 颜色与 UCenterWeb oauth-overlay-spinner 一致 */
+/* Spinner（对应 .auth-tc-spinner） */
 .sso-cb-spinner {
   width: 44px;
   height: 44px;
-  border: 3px solid #d1fae5;
-  border-top-color: #10b981;
+  flex-shrink: 0;
+  aspect-ratio: 1 / 1;
+  border: 3px solid var(--el-color-primary-light-7, #d1fae5);
+  border-top-color: var(--el-color-primary, #10b981);
   border-radius: 50%;
-  animation: sso-spin 0.8s linear infinite;
+  animation: sso-cb-spin 0.8s linear infinite;
 }
 
-@keyframes sso-spin {
+@keyframes sso-cb-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* Success icon */
+/* 成功图标（对应 .auth-tc-success-icon） */
 .sso-cb-success-icon {
-  width: 44px;
-  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: sso-pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  color: var(--el-color-success, #10b981);
 }
 
-.sso-cb-success-icon svg {
-  width: 100%;
-  height: 100%;
+.sso-cb-success-icon :deep(.el-icon) {
+  color: var(--el-color-success, #10b981);
 }
 
-/* Error icon */
+/* 错误图标（对应 .auth-tc-error-icon） */
 .sso-cb-error-icon {
-  width: 44px;
-  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: sso-pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
 }
 
-.sso-cb-error-icon svg {
-  width: 100%;
-  height: 100%;
+.sso-cb-error-icon :deep(.el-icon) {
+  color: var(--el-color-danger, #f56c6c);
 }
 
-@keyframes sso-pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.5);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* ---- 状态文字：与 UCenterWeb oauth-overlay-status 一致 ---- */
-.sso-cb-status-text {
-  margin: 0;
+/* ---- 主文字（对应 .auth-tc-text） ---- */
+.sso-cb-text {
   font-size: 15px;
   font-weight: 500;
-  color: #374151;
-  text-align: center;
+  color: var(--el-text-color-primary, #303133);
+  margin: 0;
   min-height: 1.5em;
 }
 
-.sso-cb-status-text.is-error {
-  color: #e53e3e;
-}
-
-/* ---- 错误详情 ---- */
-.sso-cb-error-msg {
-  margin: 12px auto 0;
+/* ---- 副文字/错误详情（对应 .auth-tc-sub-text） ---- */
+.sso-cb-sub-text {
   font-size: 13px;
-  color: #6b7280;
-  text-align: center;
-  max-width: 240px;
+  color: var(--el-text-color-secondary, #909399);
+  margin: 10px 0 0;
   line-height: 1.5;
 }
 
 /* ---- 重试按钮 ---- */
 .sso-cb-retry-btn {
   margin-top: 16px;
-  padding: 9px 28px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #ffffff;
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
+}
+
+/* ============================================================
+   动画：与 AuthTransitionCard 完全一致的参数
+   ============================================================ */
+
+/* 指示器切换：缩放 + 淡入淡出（弹性曲线）*/
+.sso-cb-indicator-enter-active {
   transition:
-    opacity 0.2s,
-    transform 0.1s;
+    opacity 0.25s ease,
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.sso-cb-retry-btn:hover {
-  opacity: 0.9;
+.sso-cb-indicator-leave-active {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
 }
 
-.sso-cb-retry-btn:active {
-  transform: scale(0.97);
+.sso-cb-indicator-enter-from {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.sso-cb-indicator-leave-to {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+/* 状态文字切换：上下滑动 + 淡入淡出 */
+.sso-cb-text-enter-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.sso-cb-text-leave-active {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.sso-cb-text-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.sso-cb-text-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>

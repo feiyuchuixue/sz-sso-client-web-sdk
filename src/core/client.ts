@@ -62,6 +62,7 @@ export class SsoClient {
       callbackPath: options.callbackPath ?? DEFAULTS.callbackPath,
       httpTimeout: options.httpTimeout ?? DEFAULTS.httpTimeout,
       successCode: options.successCode ?? DEFAULTS.successCode,
+      theme: options.theme,
       onLoginSuccess: options.onLoginSuccess,
       onLoginError: options.onLoginError,
     };
@@ -78,7 +79,7 @@ export class SsoClient {
   /** 获取认证中心 URL 并跳转 */
   async goSsoLogin(backUrl?: string): Promise<void> {
     const url = await this.getSsoAuthUrl(backUrl);
-    window.location.href = url;
+    window.location.href = this.appendThemeParam(url);
   }
 
   /**
@@ -110,6 +111,30 @@ export class SsoClient {
     const back =
       backUrl ?? (typeof window !== "undefined" ? window.location.href : "/");
     return `${origin}${this.config.callbackPath}?back=${encodeURIComponent(back)}`;
+  }
+
+  /**
+   * 向 SSO URL 追加 theme 参数。
+   *
+   * 优先级：
+   * 1. config.theme 为 'dark' 或 'light' 时，直接使用配置值
+   * 2. config.theme 为 'auto' 或未设置时，自动检测消费方当前的 html.dark class
+   *    - html 元素含 'dark' class → 'dark'
+   *    - 否则 → 'light'
+   */
+  private appendThemeParam(url: string): string {
+    let theme = this.config.theme;
+    if (!theme || theme === "auto") {
+      // 自动检测：读取消费方当前 html.dark class（Element Plus 生态标准）
+      theme =
+        typeof document !== "undefined" &&
+        document.documentElement.classList.contains("dark")
+          ? "dark"
+          : "light";
+    }
+    const u = new URL(url);
+    u.searchParams.set("theme", theme);
+    return u.toString();
   }
 }
 
