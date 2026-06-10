@@ -36,13 +36,13 @@ const clientName = computed(() => (route.query.clientName as string) || "");
 /**
  * 切换账号：跳转到认证中心登录页（不携带 redirect 参数）。
  * 用户在认证中心重新登录后，可从"我的应用"进入有权限的应用。
- * 需要 client 配置 ucenterBaseUrl，否则降级到 console.warn。
+ * 需要 client 配置 authCenterBaseUrl，否则降级到 console.warn。
  */
 function switchAccount() {
   try {
-    client.goSsoPortal("/login");
+    client.goSsoPortal(client.getPortalRoutes().login);
   } catch (e: any) {
-    console.warn("[sso-sdk] SsoForbidden switchAccount failed: ucenterBaseUrl may not be configured.", e);
+    console.warn("[sso-sdk] SsoForbidden switchAccount failed: authCenterBaseUrl may not be configured.", e);
   }
 }
 </script>

@@ -13,7 +13,9 @@
  * import type { UserInfo } from '@/api/types/system/login'
  *
  * createSsoClient<UserInfo>({
- *   apiBaseUrl: '...',
+ *   clientFlag: 'platform',
+ *   ssoClientApiBaseUrl: '...',
+ *   authCenterBaseUrl: '...',
  *   onLoginSuccess(data) {
  *     // data.userInfo 类型为 UserInfo，无需任何强转
  *     userStore.setUserInfo(data.userInfo)
@@ -22,16 +24,56 @@
  * ```
  */
 export interface SsoClientOptions<U = SsoUserInfo> {
-  /** 客户端后端 API 基础地址, e.g. 'http://127.0.0.1:9991/api' */
-  apiBaseUrl: string;
-  /** API 模块前缀, default: '/admin' */
+  /**
+   * Client 应用标识，对应 SSO 服务端 sso_client.client_flag。
+   *
+   * 新接入项目必须显式传入。为兼容旧版本，暂不在类型层强制必填；
+   * 未配置时会在调用登录跳转时抛出明确错误。
+   */
+  clientFlag?: string;
+  /**
+   * Client 后端 SSO API 基础地址，通常是当前业务应用后端的 context path。
+   *
+   * 例如 platform local 环境为 `http://127.0.0.1:5000/api`。
+   */
+  ssoClientApiBaseUrl?: string;
+  /**
+   * 认证中心前端基础地址，例如 `http://authcenter.com:3310`。
+   */
+  authCenterBaseUrl?: string;
+  /**
+   * @deprecated 请使用 `ssoClientApiBaseUrl`。保留用于兼容旧接入代码。
+   */
+  apiBaseUrl?: string;
+  /**
+   * Client 后端 SSO 接口前缀，默认空字符串。
+   *
+   * 若接入方后端将 Sa-Token SSO client 接口挂在 `/admin` 下，可显式传入。
+   */
   apiPrefix?: string;
   /** SSO 回调路径, default: '/sso-login' */
   callbackPath?: string;
+  /** 登录成功后的默认落地页，default: '/' */
+  defaultBackUrl?: string;
+  /** 认证中心协议 mode，default: 'sso-client3' */
+  mode?: string;
   /** 请求超时(ms), default: 120000 */
   httpTimeout?: number;
   /** 成功响应码, default: '0000' */
   successCode?: string;
+  /** 可注入请求函数；不传则使用浏览器 fetch。 */
+  request?: SsoRequest;
+  /**
+   * fetch 凭证策略，默认 `same-origin`，与浏览器 fetch 默认行为一致。
+   *
+   * 开发环境通过 Vite proxy 走同源 `/api` 时无需额外配置；只有后端明确允许跨域
+   * 携带 cookie 时才应设置为 `include`。
+   */
+  fetchCredentials?: RequestCredentials;
+  /** 后端接口路径覆盖。 */
+  endpoints?: Partial<SsoEndpoints>;
+  /** 认证中心页面路径覆盖。 */
+  portalRoutes?: Partial<SsoPortalRoutes>;
   /**
    * 指定 SSO 认证中心使用的主题，与 Client App 保持一致。
    * - `'light'`：强制明亮模式
@@ -43,27 +85,8 @@ export interface SsoClientOptions<U = SsoUserInfo> {
    */
   theme?: "light" | "dark" | "auto";
   /**
-   * 认证中心（UCen）前端的 base URL，e.g. `'http://localhost:3310'`
+   * @deprecated 请使用 `authCenterBaseUrl`。保留用于兼容旧接入代码。
    *
-   * 配置后可使用 `client.goSsoPortal()` / `client.getSsoPortalUrl()` 跳转到
-   * 认证中心的个人中心页面（如 `/user/apps`、`/user/info`、`/user/account` 等）。
-   *
-   * 未配置时调用上述方法会抛出明确的配置缺失错误。
-   *
-   * @example
-   * ```ts
-   * const client = createSsoClient({
-   *   apiBaseUrl: 'http://localhost:9991/api',
-   *   ucenterBaseUrl: 'http://localhost:3310',
-   *   onLoginSuccess(data) { ... },
-   * })
-   *
-   * // 跳转到认证中心个人中心首页
-   * client.goSsoPortal()
-   *
-   * // 跳转到账号安全页
-   * client.goSsoPortal('/user/account')
-   * ```
    */
   ucenterBaseUrl?: string;
   /** 登录成功回调（业务方在此存储 token、用户信息等） */
@@ -74,19 +97,50 @@ export interface SsoClientOptions<U = SsoUserInfo> {
 
 /** 内部完整配置（合并默认值后） */
 export interface SsoClientConfig<U = SsoUserInfo> {
-  apiBaseUrl: string;
+  clientFlag?: string;
+  ssoClientApiBaseUrl: string;
+  authCenterBaseUrl?: string;
   apiPrefix: string;
   callbackPath: string;
+  defaultBackUrl: string;
+  mode: string;
   httpTimeout: number;
   successCode: string;
   theme?: "light" | "dark" | "auto";
-  ucenterBaseUrl?: string;
+  request?: SsoRequest;
+  fetchCredentials: RequestCredentials;
+  endpoints: SsoEndpoints;
+  portalRoutes: SsoPortalRoutes;
   onLoginSuccess: (data: SsoLoginResult<U>) => void | Promise<void>;
   onLoginError?: (error: unknown) => void;
 }
 
+/** SDK 内部使用的最小请求抽象，避免核心层绑定 axios。 */
+export type SsoRequest = <T = unknown>(request: SsoRequestOptions) => Promise<T>;
+
+export interface SsoRequestOptions {
+  url: string;
+  method?: "GET" | "POST";
+  params?: Record<string, string | number | boolean | undefined>;
+  timeout?: number;
+  credentials?: RequestCredentials;
+}
+
+/** Client 后端 SSO 接口路径。 */
+export interface SsoEndpoints {
+  /** ticket 换取当前 client accessToken 的接口。 */
+  loginByTicket: string;
+}
+
+/** 认证中心前端页面路径。 */
+export interface SsoPortalRoutes {
+  login: string;
+  security: string;
+  applications: string;
+}
+
 /**
- * 登录成功返回数据（doLoginByTicket 响应）
+ * 登录成功返回数据（ticket 换 token 响应）
  *
  * 支持泛型参数 `U` 以精确描述 `userInfo` 的类型，消除业务方的类型强转。
  *

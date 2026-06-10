@@ -22,12 +22,11 @@ export default defineConfig({
         `${entryName}.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
-      external: ["vue", "vue-router", "axios"],
+      external: ["vue", "vue-router"],
       output: {
         globals: {
           vue: "Vue",
           "vue-router": "VueRouter",
-          axios: "axios",
         },
       },
     },

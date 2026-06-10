@@ -1,66 +1,88 @@
-import axios, { type AxiosInstance } from "axios";
-import type { SsoApiResult, SsoLoginResult } from "./types";
+import type {
+  SsoApiResult,
+  SsoClientConfig,
+  SsoLoginResult,
+  SsoRequest,
+  SsoRequestOptions,
+  SsoUserInfo,
+} from "./types";
 
-/** SsoHttpClient 所需的最小配置子集（不含泛型相关字段） */
-interface HttpClientConfig {
-  apiBaseUrl: string;
-  apiPrefix: string;
-  httpTimeout: number;
-  successCode: string;
+const ABSOLUTE_URL_RE = /^https?:\/\//i;
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
-/**
- * SDK 内部 HTTP 客户端
- * 仅用于 SSO 相关的两个 API 调用：getSsoAuthUrl / doLoginByTicket
- *
- * 不感知泛型 U，始终以 SsoLoginResult（宽松类型）返回原始响应。
- * 泛型转换由上层 SsoClient<U>.handleCallback 负责。
- */
-export class SsoHttpClient {
-  private http: AxiosInstance;
-  private config: HttpClientConfig;
+function trimLeadingSlash(value: string): string {
+  return value.replace(/^\/+/, "");
+}
 
-  constructor(config: HttpClientConfig) {
-    this.config = config;
+function joinUrl(baseUrl: string, path: string): string {
+  if (ABSOLUTE_URL_RE.test(path)) return path;
+  const base = trimTrailingSlash(baseUrl);
+  const next = trimLeadingSlash(path);
+  return next ? `${base}/${next}` : base;
+}
 
-    this.http = axios.create({
-      baseURL: config.apiBaseUrl,
-      timeout: config.httpTimeout,
+function appendParams(url: string, params?: SsoRequestOptions["params"]): string {
+  if (!params) return url;
+
+  const target = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      target.searchParams.set(key, String(value));
+    }
+  });
+
+  return ABSOLUTE_URL_RE.test(url) ? target.toString() : `${target.pathname}${target.search}`;
+}
+
+function createTimeoutSignal(timeout: number): AbortSignal | undefined {
+  if (typeof AbortController === "undefined" || timeout <= 0) return undefined;
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeout);
+  return controller.signal;
+}
+
+export function createFetchRequest(successCode: string): SsoRequest {
+  return async <T = unknown>(request: SsoRequestOptions): Promise<T> => {
+    const url = appendParams(request.url, request.params);
+    const response = await fetch(url, {
+      method: request.method ?? "GET",
+      credentials: request.credentials ?? "same-origin",
+      signal: request.timeout ? createTimeoutSignal(request.timeout) : undefined,
     });
 
-    // 响应拦截：统一解包
-    this.http.interceptors.response.use(
-      (response) => {
-        const data = response.data as SsoApiResult;
-        if (data && data.code === config.successCode) {
-          return data as any;
-        }
-        return Promise.reject(data);
-      },
-      (error) => Promise.reject(error),
-    );
+    if (!response.ok) {
+      throw new Error(`[sso-sdk] HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const payload = (await response.json()) as SsoApiResult<T>;
+    if (payload && payload.code === successCode) {
+      return payload.data;
+    }
+
+    throw payload;
+  };
+}
+
+export class SsoHttpClient<U = SsoUserInfo> {
+  private config: SsoClientConfig<U>;
+  private request: SsoRequest;
+
+  constructor(config: SsoClientConfig<U>) {
+    this.config = config;
+    this.request = config.request ?? createFetchRequest(config.successCode);
   }
 
-  /**
-   * 获取认证中心跳转地址
-   * @param clientLoginUrl 当前客户端回调地址，认证中心处理后会跳转回来
-   */
-  async getSsoAuthUrl(clientLoginUrl: string): Promise<string> {
-    const res = await this.http.get<any, SsoApiResult<string>>(
-      `${this.config.apiPrefix}/sso/getSsoAuthUrl`,
-      { params: { clientLoginUrl } },
-    );
-    return res.data;
-  }
-
-  /**
-   * 使用 ticket 换取登录凭证
-   */
-  async doLoginByTicket(ticket: string): Promise<SsoLoginResult> {
-    const res = await this.http.get<any, SsoApiResult<SsoLoginResult>>(
-      `${this.config.apiPrefix}/sso/doLoginByTicket`,
-      { params: { ticket } },
-    );
-    return res.data;
+  async loginByTicket(ticket: string): Promise<SsoLoginResult<U>> {
+    return this.request<SsoLoginResult<U>>({
+      url: joinUrl(this.config.ssoClientApiBaseUrl, `${this.config.apiPrefix}${this.config.endpoints.loginByTicket}`),
+      method: "GET",
+      params: { ticket },
+      timeout: this.config.httpTimeout,
+      credentials: this.config.fetchCredentials,
+    });
   }
 }

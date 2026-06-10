@@ -118,7 +118,7 @@ async function handleCallback() {
   try {
     if (ticket) {
       // 有 ticket：调后端换 token
-      await client.handleCallback(ticket, back);
+      await client.handleCallback(ticket);
 
       // 切换为成功态
       status.value = "success";

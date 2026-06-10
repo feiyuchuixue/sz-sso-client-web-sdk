@@ -11,4 +11,8 @@ export type {
   SsoLoginResult,
   SsoUserInfo,
   SsoApiResult,
+  SsoRequest,
+  SsoRequestOptions,
+  SsoEndpoints,
+  SsoPortalRoutes,
 } from "./core/types";
