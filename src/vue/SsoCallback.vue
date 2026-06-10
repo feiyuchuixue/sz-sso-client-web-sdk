@@ -51,13 +51,15 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElIcon, ElButton } from "element-plus";
 import { CircleCheck, CircleClose } from "@element-plus/icons-vue";
 import { useSsoClient } from "./composables";
 import SsoLogo from "./SsoLogo.vue";
 
 defineOptions({ name: "SsoCallback" });
+
+const SSO_CLIENT_FORBIDDEN_CODE = "O4031";
 
 // ---- 类型 ----
 type Status = "loading" | "success" | "error";
@@ -85,6 +87,7 @@ function isLoginPath(url: string): boolean {
 
 // ---- 状态 ----
 const route = useRoute();
+const router = useRouter();
 const client = useSsoClient();
 
 const status = ref<Status>("loading");
@@ -120,8 +123,8 @@ async function handleCallback() {
       // 切换为成功态
       status.value = "success";
 
-      // 短暂展示成功状态后跳转
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // 展示成功状态后跳转：600ms = ✓图标入场动画（0.25s弹性）完整播完 + 约0.35s用户可感知停留
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
       // 确定跳转目标：back 解码后若指向登录页则兜底跳首页
       const target = back ? decodeURIComponent(back) : "/";
@@ -133,13 +136,24 @@ async function handleCallback() {
       // goSsoLogin 执行 window.location.href，页面已离开，以下代码不会运行
     }
   } catch (e: any) {
-    status.value = "error";
-    errorMsg.value =
-      e?.message ||
-      e?.msg ||
-      (typeof e === "string" ? e : "登录失败，请稍后重试");
-    console.error("[sso-sdk] SSO callback failed:", e);
-    client.getConfig().onLoginError?.(e);
+    if (e?.code === SSO_CLIENT_FORBIDDEN_CODE) {
+      // 无权限：跳转到独立无权限页
+      router.replace({
+        path: "/sso-forbidden",
+        query: {
+          clientName: e?.data?.clientName ?? "",
+          back: back,
+        },
+      });
+    } else {
+      status.value = "error";
+      errorMsg.value =
+        e?.message ||
+        e?.msg ||
+        (typeof e === "string" ? e : "登录失败，请稍后重试");
+      console.error("[sso-sdk] SSO callback failed:", e);
+      client.getConfig().onLoginError?.(e);
+    }
   }
 }
 
@@ -185,9 +199,17 @@ onMounted(() => {
     var(--el-color-primary-light-9, #f0fdf4) 0%,
     var(--el-fill-color-blank, #ffffff) 100%
   );
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Microsoft YaHei", sans-serif;
+  font-family: var(
+    --el-font-family,
+    "Helvetica Neue",
+    Helvetica,
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "微软雅黑",
+    Arial,
+    sans-serif
+  );
 }
 
 /* ---- 卡片（对应 AuthTransitionCard .auth-tc-card） ---- */
@@ -318,28 +340,5 @@ onMounted(() => {
 .sso-cb-indicator-leave-to {
   opacity: 0;
   transform: scale(0.8);
-}
-
-/* 状态文字切换：上下滑动 + 淡入淡出 */
-.sso-cb-text-enter-active {
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
-}
-
-.sso-cb-text-leave-active {
-  transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
-}
-
-.sso-cb-text-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-
-.sso-cb-text-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
 }
 </style>

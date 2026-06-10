@@ -2,8 +2,26 @@
 // sz-sso-client-web-sdk 类型定义
 // ============================================================
 
-/** 用户配置接口（createSsoClient 入参） */
-export interface SsoClientOptions {
+/**
+ * 用户配置接口（createSsoClient 入参）
+ *
+ * 支持泛型参数 `U` 以精确描述 `onLoginSuccess` 回调中 `data.userInfo` 的类型。
+ * 通过 `createSsoClient<UserInfo>({...})` 传入，TypeScript 会自动推断回调参数类型。
+ *
+ * @example
+ * ```ts
+ * import type { UserInfo } from '@/api/types/system/login'
+ *
+ * createSsoClient<UserInfo>({
+ *   apiBaseUrl: '...',
+ *   onLoginSuccess(data) {
+ *     // data.userInfo 类型为 UserInfo，无需任何强转
+ *     userStore.setUserInfo(data.userInfo)
+ *   }
+ * })
+ * ```
+ */
+export interface SsoClientOptions<U = SsoUserInfo> {
   /** 客户端后端 API 基础地址, e.g. 'http://127.0.0.1:9991/api' */
   apiBaseUrl: string;
   /** API 模块前缀, default: '/admin' */
@@ -24,28 +42,75 @@ export interface SsoClientOptions {
    * SSO 前端收到后立即同步到 localStorage，确保整个认证流程主题一致。
    */
   theme?: "light" | "dark" | "auto";
+  /**
+   * 认证中心（UCen）前端的 base URL，e.g. `'http://localhost:3310'`
+   *
+   * 配置后可使用 `client.goSsoPortal()` / `client.getSsoPortalUrl()` 跳转到
+   * 认证中心的个人中心页面（如 `/user/apps`、`/user/info`、`/user/account` 等）。
+   *
+   * 未配置时调用上述方法会抛出明确的配置缺失错误。
+   *
+   * @example
+   * ```ts
+   * const client = createSsoClient({
+   *   apiBaseUrl: 'http://localhost:9991/api',
+   *   ucenterBaseUrl: 'http://localhost:3310',
+   *   onLoginSuccess(data) { ... },
+   * })
+   *
+   * // 跳转到认证中心个人中心首页
+   * client.goSsoPortal()
+   *
+   * // 跳转到账号安全页
+   * client.goSsoPortal('/user/account')
+   * ```
+   */
+  ucenterBaseUrl?: string;
   /** 登录成功回调（业务方在此存储 token、用户信息等） */
-  onLoginSuccess: (data: SsoLoginResult) => void | Promise<void>;
+  onLoginSuccess: (data: SsoLoginResult<U>) => void | Promise<void>;
   /** 登录失败回调（可选） */
   onLoginError?: (error: unknown) => void;
 }
 
 /** 内部完整配置（合并默认值后） */
-export interface SsoClientConfig {
+export interface SsoClientConfig<U = SsoUserInfo> {
   apiBaseUrl: string;
   apiPrefix: string;
   callbackPath: string;
   httpTimeout: number;
   successCode: string;
   theme?: "light" | "dark" | "auto";
-  onLoginSuccess: (data: SsoLoginResult) => void | Promise<void>;
+  ucenterBaseUrl?: string;
+  onLoginSuccess: (data: SsoLoginResult<U>) => void | Promise<void>;
   onLoginError?: (error: unknown) => void;
 }
 
-/** 登录成功返回数据（doLoginByTicket 响应） */
-export interface SsoLoginResult {
+/**
+ * 登录成功返回数据（doLoginByTicket 响应）
+ *
+ * 支持泛型参数 `U` 以精确描述 `userInfo` 的类型，消除业务方的类型强转。
+ *
+ * @example 使用默认宽松类型（向后兼容）
+ * ```ts
+ * const client = createSsoClient({ ... })
+ * // data.userInfo 类型为 SsoUserInfo
+ * ```
+ *
+ * @example 指定业务 UserInfo 类型（推荐）
+ * ```ts
+ * import type { UserInfo } from '@/api/types/system/login'
+ *
+ * const client = createSsoClient<UserInfo>({
+ *   onLoginSuccess(data) {
+ *     // data.userInfo 直接推断为 UserInfo，无需强转
+ *     userStore.setUserInfo(data.userInfo)
+ *   }
+ * })
+ * ```
+ */
+export interface SsoLoginResult<U = SsoUserInfo> {
   accessToken: string;
-  userInfo: SsoUserInfo;
+  userInfo: U;
   [key: string]: unknown;
 }
 
@@ -79,7 +144,7 @@ export interface SsoLoginResult {
  * ```
  */
 export interface SsoUserInfo {
-  id?: number | string;
+  id?: number;
   username?: string;
   nickname?: string;
   phone?: string;

@@ -1,6 +1,8 @@
 import type { RouteRecordRaw } from "vue-router";
 import { SSO_CALLBACK_PATH } from "../core/client";
 
+export const SSO_FORBIDDEN_PATH = "/sso-forbidden";
+
 /**
  * 返回 SSO 所需的静态路由配置。
  *
@@ -37,6 +39,12 @@ export function getSsoRoutes(
       name: "SsoCallback",
       component: () => import("./SsoCallback.vue"),
       meta: { title: "登录中" },
+    },
+    {
+      path: SSO_FORBIDDEN_PATH,
+      name: "SsoForbidden",
+      component: () => import("./SsoForbidden.vue"),
+      meta: { title: "无访问权限" },
     },
   ];
 }

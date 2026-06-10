@@ -1,15 +1,26 @@
 import axios, { type AxiosInstance } from "axios";
-import type { SsoClientConfig, SsoApiResult, SsoLoginResult } from "./types";
+import type { SsoApiResult, SsoLoginResult } from "./types";
+
+/** SsoHttpClient 所需的最小配置子集（不含泛型相关字段） */
+interface HttpClientConfig {
+  apiBaseUrl: string;
+  apiPrefix: string;
+  httpTimeout: number;
+  successCode: string;
+}
 
 /**
  * SDK 内部 HTTP 客户端
  * 仅用于 SSO 相关的两个 API 调用：getSsoAuthUrl / doLoginByTicket
+ *
+ * 不感知泛型 U，始终以 SsoLoginResult（宽松类型）返回原始响应。
+ * 泛型转换由上层 SsoClient<U>.handleCallback 负责。
  */
 export class SsoHttpClient {
   private http: AxiosInstance;
-  private config: SsoClientConfig;
+  private config: HttpClientConfig;
 
-  constructor(config: SsoClientConfig) {
+  constructor(config: HttpClientConfig) {
     this.config = config;
 
     this.http = axios.create({

@@ -4,6 +4,10 @@
 
 ---
 
+## 专题文档
+
+- `SsoUserMenu` 产品级接入指导：`docs/sso-user-menu-integration.md`
+
 ## 安装
 
 ```bash
@@ -36,6 +40,7 @@ app.use(pinia);
 const userStore = useUserStore();
 const ssoClient = createSsoClient({
   apiBaseUrl: import.meta.env.VITE_API_URL, // 客户端后端地址，e.g. 'http://127.0.0.1:9991/api'
+  ucenterBaseUrl: import.meta.env.VITE_UCENTER_URL, // 认证中心前端地址，使用 SsoUserMenu 「账号安全」功能时必填
   onLoginSuccess(data) {
     // 登录成功：在此存储 token 和用户信息，其余逻辑由业务方自行实现
     userStore.setToken(data.accessToken);
@@ -343,15 +348,16 @@ const handleSsoLogin = async () => {
 
 ### `createSsoClient(options)`
 
-| 配置项           | 类型                                              | 必填 | 默认值         | 说明                                      |
-| ---------------- | ------------------------------------------------- | :--: | -------------- | ----------------------------------------- |
-| `apiBaseUrl`     | `string`                                          |  ✅  | —              | 客户端后端 API 基础地址                   |
-| `onLoginSuccess` | `(data: SsoLoginResult) => void \| Promise<void>` |  ✅  | —              | 登录成功回调，在此存储 token 和用户信息   |
-| `apiPrefix`      | `string`                                          |      | `"/admin"`     | API 模块前缀，与后端 starter 配置保持一致 |
-| `callbackPath`   | `string`                                          |      | `"/sso-login"` | SSO 回调路由路径                          |
-| `httpTimeout`    | `number`                                          |      | `120000`       | 请求超时（ms）                            |
-| `successCode`    | `string`                                          |      | `"0000"`       | 后端成功响应码                            |
-| `onLoginError`   | `(error: unknown) => void`                        |      | —              | 登录失败回调                              |
+| 配置项           | 类型                                              | 必填 | 默认值         | 说明                                                              |
+| ---------------- | ------------------------------------------------- | :--: | -------------- | ----------------------------------------------------------------- |
+| `apiBaseUrl`     | `string`                                          |  ✅  | —              | 客户端后端 API 基础地址                                           |
+| `onLoginSuccess` | `(data: SsoLoginResult) => void \| Promise<void>` |  ✅  | —              | 登录成功回调，在此存储 token 和用户信息                           |
+| `apiPrefix`      | `string`                                          |      | `"/admin"`     | API 模块前缀，与后端 starter 配置保持一致                         |
+| `callbackPath`   | `string`                                          |      | `"/sso-login"` | SSO 回调路由路径                                                  |
+| `httpTimeout`    | `number`                                          |      | `120000`       | 请求超时（ms）                                                    |
+| `successCode`    | `string`                                          |      | `"0000"`       | 后端成功响应码                                                    |
+| `onLoginError`   | `(error: unknown) => void`                        |      | —              | 登录失败回调                                                      |
+| `ucenterBaseUrl` | `string`                                          |      | —              | 认证中心前端地址，使用 `SsoUserMenu` 的「账号安全」功能时必须配置 |
 
 ---
 
@@ -374,6 +380,8 @@ SDK 默认回调路径常量（值为 `'/sso-login'`），用于路由白名单�
 | `goSsoLogin(backUrl?)`             | 获取认证中心 URL 并立即跳转                                     |
 | `getSsoAuthUrl(backUrl?)`          | 仅获取认证中心 URL，不跳转                                      |
 | `handleCallback(ticket, backUrl?)` | ticket 换 token，触发 `onLoginSuccess` 回调（Vue 场景自动调用） |
+| `goSsoPortal(targetPath?)`         | 跳转到认证中心指定页面（需配置 `ucenterBaseUrl`）                |
+| `getSsoPortalUrl(targetPath?)`     | 获取认证中心页面完整 URL，不跳转（需配置 `ucenterBaseUrl`）      |
 | `getConfig()`                      | 获取当前配置（只读）                                            |
 
 ### Vue 适配层（`sz-sso-client-web-sdk/vue`）
@@ -405,6 +413,102 @@ await client.goSsoLogin();
 #### `SsoCallback`
 
 SSO 回调处理组件，内置 loading 状态和失败重试。通过 `getSsoRoutes()` 自动注册，无需手动引入。
+
+#### `SsoUserMenu`
+
+统一用户菜单组件，提供产品级的右上角账户面板，内部分为「本系统」与「认证中心」两类能力：
+
+- 顶部账户摘要：展示用户名称，并提示"统一身份由认证中心管理"
+- 本系统：`个人信息`（由 client 自己处理弹窗或页面）
+- 认证中心：`账号与安全`、`个人中心` 两个新标签页入口
+- 底部：`退出登录`
+
+**使用前提**：`createSsoClient` 中需配置 `ucenterBaseUrl`，否则点击认证中心入口时会抛出配置缺失错误。
+
+**Props：**
+
+| Prop          | 类型     | 默认值 | 说明                                              |
+| ------------- | -------- | ------ | ------------------------------------------------- |
+| `avatarSrc`   | `string` | `''`   | 头像图片 URL（由 client 处理 OSS 转换后传入）     |
+| `displayName` | `string` | `''`   | 摘要区主名称，建议传昵称                          |
+| `username`    | `string` | `''`   | 兜底账户名，`displayName` 为空时展示              |
+
+**Emits：**
+
+| 事件                  | 说明                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `personal-info-click` | 点击「个人信息」菜单项时触发，client 监听并打开弹窗                                 |
+| `logout`              | 用户在确认弹窗中点击「确定」后触发，client 监听并执行退出清理（调接口、清 store 等） |
+
+**Slots：**
+
+| Slot            | 说明                                           |
+| --------------- | ---------------------------------------------- |
+| `personal-info` | 用于放置 client 的个人信息弹窗组件              |
+
+**完整示例（与 `sz-sso-client-web-v2` 对接方式）：**
+
+```vue
+<template>
+  <SsoUserMenu
+    :avatar-src="avatarSrc || ''"
+    :display-name="userStore.userInfo.nickname || ''"
+    :username="userStore.userInfo.username || ''"
+    @personal-info-click="infoRef?.openDialog()"
+    @logout="onLogout"
+  >
+    <template #personal-info>
+      <!-- client 自己的业务弹窗，展示用户名、部门、身份证等 client 侧字段 -->
+      <InfoDialog ref="infoRef" />
+    </template>
+  </SsoUserMenu>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { SsoUserMenu } from 'sz-sso-client-web-sdk/vue'
+import { ElMessage } from 'element-plus'
+import { LOGIN_URL } from '@/config'
+import { logoutApi } from '@/api/modules/system/login'
+import { useUserStore } from '@/stores/modules/user'
+import { useAuthStore } from '@/stores/modules/auth'
+import InfoDialog from './InfoDialog.vue'
+
+const router = useRouter()
+const userStore = useUserStore()
+const authStore = useAuthStore()
+const infoRef = ref<InstanceType<typeof InfoDialog>>()
+const avatarSrc = ref<string | null>(null)
+
+// 头像加载逻辑（client 自行处理 OSS 转换）
+const resolveAvatar = async () => {
+  avatarSrc.value = userStore.userInfo.logo || null
+}
+
+// 退出登录：由 SsoUserMenu 触发确认弹窗后 emit logout 事件
+const onLogout = async () => {
+  try {
+    await logoutApi()   // ✅ 必须调 /sso/logout（全局登出），而非 /auth/logout
+  } catch { /* 静默处理 */ }
+  userStore.clear()
+  authStore.clear()
+  router.replace(LOGIN_URL)
+  ElMessage.success('退出登录成功！')
+}
+
+resolveAvatar()
+watch(() => userStore.userInfo.logo, resolveAvatar)
+</script>
+```
+
+> **说明：**
+>
+> - `SsoUserMenu` 内置确认弹窗，用户点击「退出登录」后弹出"是否确认退出"，确认后才触发 `logout` 事件
+> - `账号与安全` 会新标签页打开认证中心 `/user/account`
+> - `个人中心` 会新标签页打开认证中心 `/user/apps`
+> - 认证中心 session cookie 未过期时，用户进入上述页面通常无需重新登录
+> - 头像 URL 由 client 侧处理（包括私有 OSS 地址转换），处理完成后通过 `avatar-src` prop 传入组件
 
 ---
 
