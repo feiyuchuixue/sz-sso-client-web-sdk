@@ -85,4 +85,14 @@ export class SsoHttpClient<U = SsoUserInfo> {
       credentials: this.config.fetchCredentials,
     });
   }
+
+  async getPortalUrl(targetPath: string): Promise<string> {
+    return this.request<string>({
+      url: joinUrl(this.config.ssoClientApiBaseUrl, `${this.config.apiPrefix}${this.config.endpoints.portalUrl}`),
+      method: "GET",
+      params: { targetPath },
+      timeout: this.config.httpTimeout,
+      credentials: this.config.fetchCredentials,
+    });
+  }
 }

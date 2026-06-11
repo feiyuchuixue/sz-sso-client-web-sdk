@@ -130,6 +130,8 @@ export interface SsoRequestOptions {
 export interface SsoEndpoints {
   /** ticket 换取当前 client accessToken 的接口。 */
   loginByTicket: string;
+  /** 获取认证中心个人门户一次性入口 URL 的接口。 */
+  portalUrl: string;
 }
 
 /** 认证中心前端页面路径。 */

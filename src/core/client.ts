@@ -23,6 +23,7 @@ const DEFAULTS = {
   mode: "sso-client3",
   endpoints: {
     loginByTicket: "/sso/doLoginByTicket",
+    portalUrl: "/sso/getSsoPortalUrl",
   },
 } as const;
 
@@ -117,13 +118,20 @@ export class SsoClient<U = SsoUserInfo> {
     return result;
   }
 
+  /** 获取认证中心页面的直接 URL。仅适合认证中心已有登录态的场景。 */
   getSsoPortalUrl(targetPath: string = this.config.portalRoutes.applications): string {
     const authCenterBaseUrl = requireConfigValue(this.config.authCenterBaseUrl, "authCenterBaseUrl");
     return `${trimTrailingSlash(authCenterBaseUrl)}${withLeadingSlash(targetPath)}`;
   }
 
-  goSsoPortal(targetPath: string = this.config.portalRoutes.applications): void {
-    window.location.href = this.getSsoPortalUrl(targetPath);
+  /** 通过 Client 后端获取带一次性 portal ticket 的认证中心入口 URL。 */
+  async getSsoPortalEntryUrl(targetPath: string = this.config.portalRoutes.applications): Promise<string> {
+    return this.httpClient.getPortalUrl(targetPath);
+  }
+
+  /** 通过一次性 portal ticket 进入认证中心页面。 */
+  async goSsoPortal(targetPath: string = this.config.portalRoutes.applications): Promise<void> {
+    window.location.href = await this.getSsoPortalEntryUrl(targetPath);
   }
 
   getPortalRoutes(): Readonly<SsoPortalRoutes> {

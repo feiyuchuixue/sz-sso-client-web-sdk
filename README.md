@@ -1,664 +1,326 @@
-# sz-sso-client-web-sdk
+# sz-sso Client SDK 统一接入指南
 
-`sz-sso-client-web-sdk` 是前端 Client 接入 `sz-sso` 统一认证中心的轻量 SDK。
+本文是一篇面向接入方的完整指南，覆盖 **Java 后端 Client Starter** 与 **Web/Vue 前端 Client SDK** 的接入顺序、最小配置、扩展点和联调验收。你可以把它当作一份从 0 开始接入 sz-sso 的操作手册。
 
-它的职责是 **连接 SSO 协议，不接管业务状态**：
+当前文档基于以下实际代码编写：
 
-- 构造认证中心登录地址。
-- 处理 `/sso-login` 回调。
-- 使用 `ticket` 调用 Client 后端换取当前应用 token。
-- 提供 Vue 3 接入胶水和可选用户菜单组件。
+| 类型 | 工程 | 说明 |
+| --- | --- | --- |
+| Java Client SDK | `sz-sso-client-starter` | Spring Boot 后端接入 SDK |
+| Web Client SDK | `sz-sso-client-web-sdk` | Vue 前端轻量接入 SDK |
+| Java 接入示例 | `sz-sso-client-demo` | 后端 Client 示例 |
+| Web 接入示例 | `sz-sso-client-web-demo` | 前端 Client 示例 |
 
-它不会内置路由守卫、业务 token 存储、菜单权限初始化、axios 拦截器、WebSocket 清理等业务逻辑。这些逻辑仍由接入应用自己完成。
+> 本文只说明当前已经落地的 Client 接入能力。OAuth、OIDC、SAML、LDAP、AD、MFA、第三方 Provider 等企业级协议或账号治理能力不属于当前开源版 Client SDK 已完成能力。
 
-## 设计原则
+## 一、先理解整体流程
 
-- `core` 层只依赖浏览器 API，默认使用 `fetch`，不依赖 `axios`。
-- Vue、Vue Router、Element Plus 都是可选 peer dependency。
-- UI 组件是可选能力，不是接入 SSO 的必需条件。
-- 后端地址、认证中心地址、页面路径都由接入应用配置，SDK 不写死具体业务部署地址。
-- 退出登录由业务方实现，但应调用 `/sso/logout` 完成全局登出。
+sz-sso 的 Client 接入分为两部分：
 
-## 安装
+1. **后端 Client**：接收前端带回来的 `ticket`，调用 SSO Server 换取登录信息，并在本系统写入登录态。
+2. **前端 Client**：负责跳转认证中心、处理 `/sso-login` 回调、拿 `ticket` 调后端换取本系统 token。
+
+一次完整登录流程如下：
+
+```text
+用户访问业务系统
+  -> 前端发现未登录，跳转 /sso-login?back=原始地址
+  -> Web SDK 判断当前没有 ticket，拼出认证中心登录地址
+  -> 用户在认证中心登录
+  -> 认证中心回跳业务前端 /sso-login?ticket=xxx&back=xxx
+  -> Web SDK 调 Client 后端 /sso/doLoginByTicket
+  -> Java Starter 调 SSO Server 校验 ticket
+  -> Java Starter 映射本地用户、写入本地登录态
+  -> 后端返回本系统 accessToken
+  -> 前端保存 token，并回到 back 地址
+```
+
+你接入时只需要记住一句话：
+
+> **前端负责跳转和拿票，后端负责验票和落本地登录态。**
+
+## 二、接入优先级
+
+建议按下面顺序接入。不要一上来就做角色同步、用户菜单、扩展消息，否则排查成本会很高。
+
+| 优先级 | 目标 | 必做内容 | 完成信号 |
+| --- | --- | --- | --- |
+| P0 | 跑通统一登录 | 后端 Starter、前端 SDK、`/sso-login`、`ticket` 换 token | 用户能从业务系统跳到认证中心，登录后回到业务系统并登录成功 |
+| P1 | 补齐业务权限 | 默认角色、Client 超管、退出清理、用户菜单 | 登录后角色正确，超管识别正确，退出后本地状态清空 |
+| P2 | 扩展治理能力 | 自定义消息、更多用户同步、诊断能力 | 能按业务需要扩展 SSO Server 与 Client 之间的消息 |
+
+如果你是第一次接入，只需要先完成 **P0**。
+
+## 三、接入前准备
+
+开始前先确认这些信息。信息不完整时，后面的配置会不知道该填什么。
+
+| 配置项 | 示例 | 说明 |
+| --- | --- | --- |
+| Client 标识 | `sso-client3` | 当前业务系统在 SSO Server 中登记的 Client 标识 |
+| SSO Server API 地址 | `http://127.0.0.1:5001/api/sso` | Java Starter 调用 SSO Server 的后端接口地址 |
+| 认证中心前端地址 | `http://127.0.0.1:3310` | 浏览器跳转登录页的地址 |
+| Client 后端 API 前缀 | `/api` | Web SDK 调用业务后端时使用的基础路径 |
+| Client 后端推送接收地址 | `http://127.0.0.1:5001/api/sso/pushS` | 当前 Client 后端暴露给 SSO Server 的消息推送地址 |
+| 登录回调路径 | `/sso-login` | 前端 SDK 默认回调路由 |
+
+示例 demo 中使用的关键值：
+
+```yaml
+client: sso-client3
+server-url: http://127.0.0.1:5001/api/sso
+auth-url: http://127.0.0.1:3310/login
+push-url: http://127.0.0.1:5001/api/sso/pushS
+```
+
+前端 demo 中使用：
+
+```env
+VITE_API_CONTEXT_PATH=/api
+VITE_API_PROXY_TARGET=http://127.0.0.1:9991
+VITE_SSO_CLIENT_FLAG=sso-client3
+VITE_UCENTER_URL=http://127.0.0.1:3310
+```
+
+## 四、P0：后端接入 Java Client Starter
+
+后端接入的目标是：让业务系统拥有 `/sso/doLoginByTicket` 等端点，并能把 SSO 用户转换成本系统登录用户。
+
+### 4.1 添加 Maven 依赖
+
+在业务后端工程中引入：
+
+```xml
+<dependency>
+    <groupId>com.sz</groupId>
+    <artifactId>sz-sso-client-starter</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+如果你的工程没有直接引入 core，也可以按 demo 的方式同时引入：
+
+```xml
+<dependency>
+    <groupId>com.sz</groupId>
+    <artifactId>sz-sso-core</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+### 4.2 配置 Sa-Token SSO Client
+
+在业务系统的配置文件中增加 `sa-token.sso-client`：
+
+```yaml
+sa-token:
+  sso-client:
+    # Client 标识，必须与 SSO Server 中登记的 client 一致
+    client: sso-client3
+
+    # SSO Server 后端接口地址。Starter 会用它校验 ticket、获取用户信息
+    server-url: http://127.0.0.1:5001/api/sso
+
+    # 认证中心前端登录页地址。后端 /sso/getSsoAuthUrl 会基于它生成跳转地址
+    auth-url: http://127.0.0.1:3310/login
+
+    # 是否向 SSO Server 注册单点登出回调
+    reg-logout-call: true
+
+    # 当前 Client 后端暴露给 SSO Server 的推送地址
+    # 注意：这里是 Server 调 Client 的地址，demo 中是 /api/sso/pushS
+    push-url: http://127.0.0.1:5001/api/sso/pushS
+```
+
+常见误区：
+
+| 容易填错的地方 | 正确写法 |
+| --- | --- |
+| `server-url` 写成认证中心前端地址 | 应写 SSO Server 后端 API 地址 |
+| `auth-url` 写成后端 API 地址 | 应写认证中心前端登录页地址 |
+| 把消息接收入口误当推送登记地址 | 应写当前 Client 提供给 SSO Server 调用的推送入口，demo 是 `/api/sso/pushS` |
+| 使用历史配置名 | 当前配置项是 `reg-logout-call` |
+
+### 4.3 实现用户映射：`SsoUserMappingService`
+
+这是后端接入的第一个必选扩展点。
+
+SSO Server 认识的是统一身份用户，本业务系统认识的是本地用户。`SsoUserMappingService` 的作用就是在两者之间做转换。
+
+接口定义：
+
+```java
+public interface SsoUserMappingService {
+
+    Object toServerUserId(Object clientUserId);
+
+    Object toClientUserId(Object serverUserId);
+
+    Object syncSsoRegisterUser(SaSsoMessage message, String client);
+}
+```
+
+你需要实现三个动作：
+
+| 方法 | 什么时候用 | 你要做什么 |
+| --- | --- | --- |
+| `toServerUserId` | 本地用户同步到 SSO 时 | 根据本地用户 ID 找到对应的 SSO 用户 ID |
+| `toClientUserId` | SSO 登录回业务系统时 | 根据 SSO 用户 ID 找到或创建本地用户，并返回本地用户 ID |
+| `syncSsoRegisterUser` | SSO Server 推送新注册用户时 | 在本系统创建或关联本地用户 |
+
+示例写法：
+
+```java
+@Service
+public class DemoSsoUserMappingService implements SsoUserMappingService {
+
+    private final DemoUserService demoUserService;
+
+    public DemoSsoUserMappingService(DemoUserService demoUserService) {
+        this.demoUserService = demoUserService;
+    }
+
+    @Override
+    public Object toServerUserId(Object clientUserId) {
+        return demoUserService.findServerUserIdByClientUserId(clientUserId);
+    }
+
+    @Override
+    public Object toClientUserId(Object serverUserId) {
+        return demoUserService.findOrCreateClientUserIdByServerUserId(serverUserId);
+    }
+
+    @Override
+    public Object syncSsoRegisterUser(SaSsoMessage message, String client) {
+        return demoUserService.createUserFromSsoMessage(message, client);
+    }
+}
+```
+
+实现建议：
+
+- 已存在本地用户时，优先复用本地用户，不要重复创建。
+- 创建本地用户后，要保存 SSO 用户 ID 与本地用户 ID 的映射关系。
+- 如果你暂时没有用户表扩展字段，可以先建一张映射表保存关系。
+- `toClientUserId` 是登录链路关键方法，失败会导致 ticket 换 token 失败。
+
+### 4.4 实现登录适配：`SsoClientLoginAdapter`
+
+这是后端接入的第二个必选扩展点。
+
+Starter 负责完成 SSO 协议流程，但它不知道你的系统使用什么登录用户对象，也不知道你的系统返回给前端的 token 结构。因此需要你实现 `SsoClientLoginAdapter`。
+
+接口定义：
+
+```java
+public interface SsoClientLoginAdapter<U> {
+
+    U buildLoginUser(Long userId);
+
+    Object createLoginResult(U user, SaLoginParameter parameter, Object loginId);
+}
+```
+
+两个方法分别做：
+
+| 方法 | 你要做什么 |
+| --- | --- |
+| `buildLoginUser` | 根据本地用户 ID 查询并构建业务系统自己的登录用户对象 |
+| `createLoginResult` | 生成返回给前端的登录结果，通常包含 `accessToken` |
+
+示例写法：
+
+```java
+@Service
+public class DemoSsoClientLoginAdapter implements SsoClientLoginAdapter<DemoLoginUser> {
+
+    private final DemoUserService demoUserService;
+
+    public DemoSsoClientLoginAdapter(DemoUserService demoUserService) {
+        this.demoUserService = demoUserService;
+    }
+
+    @Override
+    public DemoLoginUser buildLoginUser(Long userId) {
+        return demoUserService.buildLoginUser(userId);
+    }
+
+    @Override
+    public Object createLoginResult(DemoLoginUser user, SaLoginParameter parameter, Object loginId) {
+        return Map.of(
+            "accessToken", StpUtil.getTokenValue(),
+            "userId", user.getUserId(),
+            "username", user.getUsername()
+        );
+    }
+}
+```
+
+前端 SDK 默认会读取后端返回数据中的 `accessToken`：
+
+```ts
+onLoginSuccess: data => {
+  userStore.setToken(data.accessToken);
+}
+```
+
+所以如果你不改前端逻辑，后端返回结果里应包含 `accessToken`。
+
+### 4.5 Starter 自动提供的端点
+
+引入 Starter 后，Client 后端会提供这些端点：
+
+| 端点 | 调用方 | 作用 |
+| --- | --- | --- |
+| `GET /sso/isLogin` | 前端或调试工具 | 判断当前是否登录 |
+| `GET /sso/getSsoAuthUrl` | 前端或调试工具 | 获取认证中心登录地址 |
+| `GET /sso/doLoginByTicket` | Web SDK | 使用 `ticket` 完成 SSO 登录 |
+| `GET /sso/getSsoPortalUrl` | Web SDK / 用户菜单 | 为当前已登录 Client 用户申请认证中心个人门户一次性入口 |
+| `POST /sso/logout` | 业务前端 | 退出当前 Client 登录态，并联动 SSO 登出逻辑 |
+| `/sso/logoutCall` | SSO Server | 单点登出回调 |
+| `/sso/pushC` | SSO Server | Sa-Token SSO Client 消息接收入口 |
+
+> 在常规前端接入中，Web SDK 最关键调用的是 `/sso/doLoginByTicket`。业务系统自己的退出按钮应调用 `/sso/logout`。头像菜单进入认证中心个人门户时，应调用 `/sso/getSsoPortalUrl`，不要直接拼认证中心 `/ucenter/*` 地址。
+
+### 4.6 后端登录内部流程
+
+理解这个流程有助于你排查问题：
+
+```text
+/sso/doLoginByTicket
+  -> 校验 ticket
+  -> 从 SSO Server 拿到 SSO 用户信息
+  -> SsoUserMappingService.toClientUserId
+  -> 应用默认角色
+  -> 查询并同步 Client 超管身份
+  -> SsoClientLoginAdapter.buildLoginUser
+  -> Sa-Token 写入登录态
+  -> SsoClientLoginAdapter.createLoginResult
+  -> 写入 TokenSession
+  -> 返回登录结果给前端
+```
+
+如果登录失败，优先排查：
+
+1. `ticket` 是否传到 `/sso/doLoginByTicket`。
+2. `server-url` 是否能访问 SSO Server。
+3. `client` 是否与 SSO Server 登记一致。
+4. `SsoUserMappingService.toClientUserId` 是否正确返回本地用户 ID。
+5. `SsoClientLoginAdapter.createLoginResult` 是否返回了前端需要的 `accessToken`。
+
+## 五、P0：前端接入 Web Client SDK
+
+前端接入的目标是：未登录时进入 `/sso-login`，SDK 自动跳认证中心；认证中心回跳后，SDK 自动拿 `ticket` 调后端换 token。
+
+### 5.1 安装依赖
+
+在业务前端工程中安装：
 
 ```bash
 pnpm add sz-sso-client-web-sdk
 ```
 
-或：
-
-```bash
-npm install sz-sso-client-web-sdk
-```
-
-## 导出入口
-
-### Core
-
-```ts
-import {
-  createSsoClient,
-  SsoClient,
-  SSO_CALLBACK_PATH,
-} from 'sz-sso-client-web-sdk'
-
-import type {
-  SsoClientOptions,
-  SsoLoginResult,
-  SsoRequest,
-  SsoPortalRoutes,
-} from 'sz-sso-client-web-sdk'
-```
-
-### Vue 适配层
-
-```ts
-import {
-  createSsoPlugin,
-  useSsoClient,
-  getSsoRoutes,
-  SsoCallback,
-  SsoForbidden,
-  SsoUserMenu,
-  SSO_FORBIDDEN_PATH,
-} from 'sz-sso-client-web-sdk/vue'
-```
-
-### 可选样式
-
-如果使用 SDK 内置的 `SsoCallback`、`SsoForbidden` 或 `SsoUserMenu`，需要引入样式：
-
-```ts
-import 'sz-sso-client-web-sdk/style.css'
-```
-
-## 快速接入：Vue 3 + Vue Router
-
-### 1. 创建 SSO Client
-
-```ts
-// src/main.ts
-import { createApp } from 'vue'
-import App from '@/App.vue'
-import router from '@/router'
-import pinia from '@/stores'
-import { useUserStore } from '@/stores/modules/user'
-
-import { createSsoClient } from 'sz-sso-client-web-sdk'
-import { createSsoPlugin } from 'sz-sso-client-web-sdk/vue'
-import 'sz-sso-client-web-sdk/style.css'
-
-const app = createApp(App)
-
-app.use(pinia)
-
-const userStore = useUserStore()
-
-const ssoClient = createSsoClient({
-  // SSO Client 标识，对应服务端 clientFlag，例如 platform、oa、crm
-  clientFlag: import.meta.env.VITE_SSO_CLIENT_FLAG,
-
-  // 当前 Client 后端 SSO API 基础地址。
-  // 开发环境推荐传相对路径 /api，让 Vite proxy 转发，避免 CORS。
-  // 生产环境可按部署方式传 /api 或 https://client.example.com/api。
-  ssoClientApiBaseUrl: import.meta.env.VITE_API_CONTEXT_PATH || '/api',
-
-  // 认证中心前端地址，用于跳转登录页、账号安全页、个人中心页。
-  authCenterBaseUrl: import.meta.env.VITE_UCENTER_URL,
-
-  // 可选：认证中心页面路径，默认就是当前开源版路径。
-  portalRoutes: {
-    login: '/login',
-    security: '/ucenter/password',
-    applications: '/ucenter/applications',
-  },
-
-  // 登录成功后由业务方落 token、初始化 store、拉取菜单权限等。
-  onLoginSuccess(data) {
-    userStore.setToken(data.accessToken)
-    // userStore.setUserInfo(data.userInfo)
-  },
-})
-
-app.use(createSsoPlugin(ssoClient))
-app.use(router)
-app.mount('#app')
-```
-
-### 2. 注册 SSO 路由
-
-```ts
-// src/router/staticRoutes.ts
-import type { RouteRecordRaw } from 'vue-router'
-import { getSsoRoutes } from 'sz-sso-client-web-sdk/vue'
-
-export const staticRoutes: RouteRecordRaw[] = [
-  {
-    path: '/login',
-    component: () => import('@/views/login/index.vue'),
-  },
-
-  // 默认注册：
-  // - /sso-login
-  // - /sso-forbidden
-  ...getSsoRoutes(),
-]
-```
-
-如果自定义回调路径，`callbackPath` 与 `getSsoRoutes(path)` 必须保持一致：
-
-```ts
-const ssoClient = createSsoClient({
-  callbackPath: '/auth/callback',
-  // ...
-})
-
-const routes = getSsoRoutes('/auth/callback')
-```
-
-### 3. 加入路由白名单
-
-`/sso-login` 是未登录状态下的回调入口，必须进入路由白名单。
-
-```ts
-// src/config/index.ts
-import { SSO_CALLBACK_PATH } from 'sz-sso-client-web-sdk'
-import { SSO_FORBIDDEN_PATH } from 'sz-sso-client-web-sdk/vue'
-
-export const ROUTER_WHITE_LIST = [
-  '/login',
-  '/500',
-  SSO_CALLBACK_PATH,
-  SSO_FORBIDDEN_PATH,
-]
-```
-
-路由守卫示例：
-
-```ts
-router.beforeEach((to, from, next) => {
-  const userStore = useUserStore()
-
-  if (ROUTER_WHITE_LIST.includes(to.path)) {
-    return next()
-  }
-
-  if (!userStore.token) {
-    return next({
-      path: '/login',
-      query: { redirect: to.fullPath },
-      replace: true,
-    })
-  }
-
-  next()
-})
-```
-
-### 4. 登录页跳转
-
-登录按钮只需要跳到 `/sso-login`，由 SDK 的 `SsoCallback` 判断当前是否有 `ticket`：
-
-- 没有 `ticket`：跳转认证中心登录页。
-- 有 `ticket`：调用 Client 后端换 token。
-
-```vue
-<template>
-  <el-button type="primary" @click="goSso">认证中心登录</el-button>
-</template>
-
-<script setup lang="ts">
-import { useRouter } from 'vue-router'
-
-const router = useRouter()
-
-function goSso() {
-  router.push({
-    path: '/sso-login',
-    query: {
-      back: '/home/index',
-    },
-  })
-}
-</script>
-```
-
-也可以在任意组件中直接调用：
-
-```ts
-import { useSsoClient } from 'sz-sso-client-web-sdk/vue'
-
-const client = useSsoClient()
-await client.goSsoLogin('/home/index')
-```
-
-## 核心流程
-
-### 登录跳转
-
-`getSsoAuthUrl(backUrl?)` 会基于配置构造认证中心登录地址：
-
-```text
-{authCenterBaseUrl}{portalRoutes.login}
-  ?client={clientFlag}
-  &redirect={当前 Client 的 callback URL}
-  &mode={mode}
-  &theme={theme}
-```
-
-默认登录路径为：
-
-```text
-{authCenterBaseUrl}/login
-```
-
-### 回调换票
-
-认证中心登录成功后会跳回：
-
-```text
-{clientOrigin}/sso-login?back=...&ticket=...&theme=...
-```
-
-`SsoCallback` 会调用：
-
-```text
-GET {ssoClientApiBaseUrl}{apiPrefix}{endpoints.loginByTicket}?ticket=...
-```
-
-默认等价于：
-
-```text
-GET /api/sso/doLoginByTicket?ticket=...
-```
-
-成功后 SDK 只执行 `onLoginSuccess(data)`，业务方应在回调中存储 token，并在自己的路由守卫或初始化流程中加载用户、菜单、按钮权限等数据。
-
-## 配置项
-
-### `createSsoClient(options)`
-
-| 配置项 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | :---: | --- | --- |
-| `clientFlag` | `string` | 是 | - | 当前 Client 标识，对应 SSO 服务端配置 |
-| `ssoClientApiBaseUrl` | `string` | 是 | `''` | 当前 Client 后端 SSO API 基础地址 |
-| `authCenterBaseUrl` | `string` | 是 | - | 认证中心前端基础地址 |
-| `onLoginSuccess` | `(data) => void \| Promise<void>` | 是 | - | ticket 换 token 成功后的业务回调 |
-| `apiPrefix` | `string` | 否 | `''` | Client 后端 SSO 接口前缀 |
-| `callbackPath` | `string` | 否 | `'/sso-login'` | 当前 Client 的 SSO 回调路由 |
-| `defaultBackUrl` | `string` | 否 | `'/'` | 未传 back 时的默认回跳地址 |
-| `mode` | `string` | 否 | `'sso-client3'` | 认证中心协议 mode |
-| `theme` | `'light' \| 'dark' \| 'auto'` | 否 | `'auto'` | 登录跳转时传给认证中心的主题 |
-| `httpTimeout` | `number` | 否 | `120000` | fetch 超时时间，单位 ms |
-| `successCode` | `string` | 否 | `'0000'` | 后端统一响应成功码 |
-| `fetchCredentials` | `RequestCredentials` | 否 | `'same-origin'` | 默认 fetch 凭证策略 |
-| `request` | `SsoRequest` | 否 | 内置 fetch | 自定义请求函数 |
-| `endpoints` | `Partial<SsoEndpoints>` | 否 | 见下文 | 覆盖 Client 后端接口路径 |
-| `portalRoutes` | `Partial<SsoPortalRoutes>` | 否 | 见下文 | 覆盖认证中心前端页面路径 |
-| `onLoginError` | `(error) => void` | 否 | - | `SsoCallback` 登录失败后的可选回调 |
-| `apiBaseUrl` | `string` | 否 | - | 旧版兼容字段，建议改用 `ssoClientApiBaseUrl` |
-| `ucenterBaseUrl` | `string` | 否 | - | 旧版兼容字段，建议改用 `authCenterBaseUrl` |
-
-默认 `endpoints`：
-
-```ts
-{
-  loginByTicket: '/sso/doLoginByTicket',
-}
-```
-
-默认 `portalRoutes`：
-
-```ts
-{
-  login: '/login',
-  security: '/ucenter/password',
-  applications: '/ucenter/applications',
-}
-```
-
-### 关于 `ssoClientApiBaseUrl`
-
-这个地址不是 SDK 写死的，必须由接入应用根据自己的部署方式传入。
-
-开发环境推荐：
-
-```ts
-ssoClientApiBaseUrl: '/api'
-```
-
-配合 Vite proxy：
-
-```ts
-server: {
-  proxy: {
-    '/api': {
-      target: 'http://127.0.0.1:5000',
-      changeOrigin: true,
-    },
-  },
-}
-```
-
-生产环境可以是相对路径，也可以是完整 URL：
-
-```ts
-ssoClientApiBaseUrl: '/api'
-ssoClientApiBaseUrl: 'https://platform.example.com/api'
-ssoClientApiBaseUrl: 'https://gateway.example.com/platform/api'
-```
-
-如果使用完整 URL 且跨域，后端需要正确配置 CORS。SDK 默认 `fetchCredentials` 为 `same-origin`，不会强制跨域携带 cookie；确实需要跨域携带 cookie 时再设置：
-
-```ts
-fetchCredentials: 'include'
-```
-
-## 自定义请求函数
-
-SDK 核心层不依赖 `axios`。如果项目希望复用自己的请求封装，可以传入 `request`：
-
-```ts
-const ssoClient = createSsoClient({
-  clientFlag: 'platform',
-  ssoClientApiBaseUrl: '/api',
-  authCenterBaseUrl: 'http://authcenter.com:3310',
-  async request(options) {
-    const result = await myHttp.get(options.url, {
-      params: options.params,
-      timeout: options.timeout,
-    })
-
-    return result.data
-  },
-  onLoginSuccess(data) {
-    userStore.setToken(data.accessToken)
-  },
-})
-```
-
-自定义 `request` 应直接返回业务数据，也就是 `SsoLoginResult`，不要再返回完整响应壳。
-
-## Core API
-
-### `createSsoClient(options)`
-
-创建 SSO Client 实例。
-
-```ts
-const client = createSsoClient({
-  clientFlag: 'platform',
-  ssoClientApiBaseUrl: '/api',
-  authCenterBaseUrl: 'http://authcenter.com:3310',
-  onLoginSuccess(data) {
-    localStorage.setItem('token', data.accessToken)
-  },
-})
-```
-
-### `client.getSsoAuthUrl(backUrl?)`
-
-只构造认证中心登录 URL，不跳转。
-
-```ts
-const url = client.getSsoAuthUrl('/home/index')
-```
-
-### `client.goSsoLogin(backUrl?)`
-
-构造认证中心登录 URL 并跳转。
-
-```ts
-await client.goSsoLogin('/home/index')
-```
-
-### `client.handleCallback(ticket)`
-
-使用认证中心返回的 ticket 换取当前 Client token，并触发 `onLoginSuccess`。
-
-```ts
-await client.handleCallback(ticket)
-```
-
-### `client.getSsoPortalUrl(targetPath?)`
-
-获取认证中心页面完整地址。
-
-```ts
-client.getSsoPortalUrl('/ucenter/password')
-client.getSsoPortalUrl('/ucenter/applications')
-```
-
-### `client.goSsoPortal(targetPath?)`
-
-跳转认证中心页面。
-
-```ts
-client.goSsoPortal('/ucenter/applications')
-```
-
-### `client.getPortalRoutes()`
-
-读取认证中心页面路径配置。
-
-```ts
-const routes = client.getPortalRoutes()
-```
-
-### `client.getConfig()`
-
-读取合并默认值后的配置。
-
-## Vue API
-
-### `createSsoPlugin(client)`
-
-将 SSO Client 注入 Vue 应用。
-
-```ts
-app.use(createSsoPlugin(ssoClient))
-```
-
-### `useSsoClient()`
-
-在 Vue 组件或 composable 中获取 SSO Client。
-
-```ts
-const client = useSsoClient()
-```
-
-### `getSsoRoutes(path?)`
-
-返回 SSO 路由数组。
-
-```ts
-...getSsoRoutes()
-...getSsoRoutes('/auth/callback')
-```
-
-默认包含：
-
-- `/sso-login`
-- `/sso-forbidden`
-
-### `SsoCallback`
-
-SSO 回调页组件。一般通过 `getSsoRoutes()` 注册，不需要手动使用。
-
-行为：
-
-- 无 `ticket`：跳转认证中心。
-- 有 `ticket`：调用 `client.handleCallback(ticket)`。
-- 成功后跳转 `back`。
-- 后端返回无权限码 `O4031` 时跳转 `/sso-forbidden`。
-- 失败时展示错误状态和重新登录按钮。
-
-### `SsoForbidden`
-
-无权限页面组件。用于当前用户没有访问某 Client 的权限时展示兜底页。
-
-### `SsoUserMenu`
-
-可选右上角用户菜单组件，适合需要统一账户入口的 Vue + Element Plus 项目。
-
-能力：
-
-- 展示当前用户摘要。
-- 触发本系统个人信息入口。
-- 打开认证中心账号安全页 `/ucenter/password`。
-- 打开认证中心个人中心页 `/ucenter/applications`。
-- 确认后触发业务方退出逻辑。
-
-示例：
-
-```vue
-<template>
-  <SsoUserMenu
-    :avatar-src="avatarSrc"
-    :display-name="userStore.profile?.nickname || ''"
-    :username="userStore.profile?.username || ''"
-    @personal-info-click="infoRef?.openDialog()"
-    @logout="logout"
-  >
-    <template #personal-info>
-      <InfoDialog ref="infoRef" />
-    </template>
-  </SsoUserMenu>
-</template>
-
-<script setup lang="ts">
-import { ref } from 'vue'
-import { SsoUserMenu } from 'sz-sso-client-web-sdk/vue'
-import InfoDialog from '@/layouts/components/Header/components/InfoDialog.vue'
-
-const infoRef = ref<InstanceType<typeof InfoDialog>>()
-
-async function logout() {
-  try {
-    await logoutApi()
-  } catch {
-    // 即使后端退出异常，也建议继续清本地状态
-  }
-
-  userStore.clear()
-  authStore.clear()
-  socketStore.close()
-  router.replace('/login')
-}
-</script>
-```
-
-Props：
-
-| Prop | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `avatarSrc` | `string` | `''` | 头像 URL，由业务方处理后传入 |
-| `displayName` | `string` | `''` | 展示名称，通常传昵称 |
-| `username` | `string` | `''` | 账号名兜底 |
-| `securityPath` | `string` | `''` | 覆盖账号安全路径 |
-| `applicationsPath` | `string` | `''` | 覆盖个人中心路径 |
-
-Emits：
-
-| 事件 | 说明 |
-| --- | --- |
-| `personal-info-click` | 点击个人信息时触发 |
-| `logout` | 用户确认退出后触发 |
-
-Slots：
-
-| Slot | 说明 |
-| --- | --- |
-| `personal-info` | 放置业务方自己的个人信息弹窗 |
-
-更完整的用户菜单说明见：
-
-```text
-docs/sso-user-menu-integration.md
-```
-
-## 纯 JS 接入
-
-没有 Vue 时可以只使用 core。
-
-```ts
-import { createSsoClient } from 'sz-sso-client-web-sdk'
-
-const client = createSsoClient({
-  clientFlag: 'portal',
-  ssoClientApiBaseUrl: '/api',
-  authCenterBaseUrl: 'http://authcenter.com:3310',
-  onLoginSuccess(data) {
-    localStorage.setItem('token', data.accessToken)
-  },
-})
-
-const params = new URLSearchParams(location.search)
-const ticket = params.get('ticket')
-const back = params.get('back') || '/'
-
-if (ticket) {
-  await client.handleCallback(ticket)
-  location.href = back
-} else {
-  await client.goSsoLogin(back)
-}
-```
-
-## 退出登录
-
-SDK 不封装退出登录，因为退出时通常要处理业务状态：
-
-- 调后端退出接口。
-- 清 token。
-- 清用户信息。
-- 清菜单和按钮权限。
-- 关闭 WebSocket。
-- 跳转登录页。
-
-`sz-sso` Client 应用应调用：
-
-```text
-POST /sso/logout
-```
-
-不要只调用：
-
-```text
-POST /auth/logout
-```
-
-区别：
-
-| 接口 | 作用 |
-| --- | --- |
-| `/auth/logout` | 只让当前 Client token 失效，不销毁认证中心 Session |
-| `/sso/logout` | 当前 Client 退出，并通知认证中心销毁全局 Session |
-
-示例：
-
-```ts
-export const logoutApi = () => {
-  return adminHttp.post('/sso/logout')
-}
-
-async function logout() {
-  try {
-    await logoutApi()
-  } catch {
-    // 后端异常时也继续清本地状态
-  }
-
-  userStore.clear()
-  authStore.clear()
-  socketStore.close()
-  router.replace('/login')
-}
-```
-
-## 本地联调 SDK
-
-如果业务项目通过 `file:` 方式依赖本 SDK：
+demo 开发阶段使用本地依赖：
 
 ```json
 {
@@ -668,134 +330,514 @@ async function logout() {
 }
 ```
 
-需要注意：业务项目通常读取 SDK 的 `dist` 产物，而不是 `src` 源码。
+### 5.2 创建 SSO Client
 
-修改 SDK 后按以下顺序处理：
-
-```bash
-# 1. 在 SDK 项目中重新构建
-pnpm run build
-
-# 2. 重启业务项目 dev server
-pnpm run dev
-```
-
-如果 Vite 仍然使用旧产物，可以清理业务项目缓存后重启：
-
-```powershell
-Remove-Item -Recurse -Force node_modules\.vite
-pnpm run dev
-```
-
-也可以在业务项目中配置 alias 直连 SDK 源码，用于 SDK 开发期 HMR。生产接入不建议这么做。
-
-## 常见问题
-
-### 1. `/sso-login` 显示 `Failed to fetch`
-
-常见原因是 `ssoClientApiBaseUrl` 传了完整后端地址，浏览器绕开 Vite proxy 直接跨域请求。
-
-开发环境建议：
+在前端入口文件中创建 SDK Client：
 
 ```ts
-ssoClientApiBaseUrl: '/api'
-```
+import { createSsoClient } from 'sz-sso-client-web-sdk';
+import { createSsoPlugin } from 'sz-sso-client-web-sdk/vue';
+import 'sz-sso-client-web-sdk/style.css';
 
-如果必须跨域访问，请确认后端 CORS 配置正确。
-
-### 2. 改了 SDK 但页面样式没变
-
-如果业务项目使用 `file:` 依赖，修改 SDK 源码后必须先在 SDK 中执行：
-
-```bash
-pnpm run build
-```
-
-然后重启业务项目 dev server。必要时清理 `node_modules/.vite`。
-
-### 3. 登录成功后没有菜单或权限
-
-SDK 只负责换 token，并调用 `onLoginSuccess`。菜单、权限、用户详情初始化应由业务项目在自己的登录成功流程或路由守卫中完成。
-
-### 4. 退出后再次点击登录会自动登录
-
-大概率是退出时调用了 `/auth/logout`，认证中心 Session 没有销毁。应改为 `/sso/logout`。
-
-### 5. 是否必须使用 `SsoUserMenu`
-
-不必须。`SsoUserMenu` 是可选 UI。只接入登录流程时只需要：
-
-- `createSsoClient`
-- `createSsoPlugin`
-- `getSsoRoutes`
-- `SSO_CALLBACK_PATH`
-
-## 类型
-
-### `SsoLoginResult`
-
-```ts
-interface SsoLoginResult<U = SsoUserInfo> {
-  accessToken: string
-  userInfo: U
-  [key: string]: unknown
-}
-```
-
-可以传入业务用户类型：
-
-```ts
-import type { UserInfo } from '@/api/types/system/login'
-
-const client = createSsoClient<UserInfo>({
-  // ...
-  onLoginSuccess(data) {
-    // data.userInfo 会推断为 UserInfo
+const ssoClient = createSsoClient({
+  clientFlag: import.meta.env.VITE_SSO_CLIENT_FLAG || 'sso-client3',
+  ssoClientApiBaseUrl: import.meta.env.VITE_API_CONTEXT_PATH || '/api',
+  authCenterBaseUrl: import.meta.env.VITE_UCENTER_URL,
+  onLoginSuccess: data => {
+    userStore.setToken(data.accessToken);
   },
-})
+});
+
+app.use(createSsoPlugin(ssoClient));
 ```
 
-### `SsoUserInfo`
+关键点：
+
+| 配置 | 示例 | 说明 |
+| --- | --- | --- |
+| `clientFlag` | `sso-client3` | 与后端 `sa-token.sso-client.client` 保持一致 |
+| `ssoClientApiBaseUrl` | `/api` | Web SDK 请求 Client 后端的基础路径 |
+| `authCenterBaseUrl` | `http://127.0.0.1:3310` | 认证中心前端地址 |
+| `onLoginSuccess` | `userStore.setToken(data.accessToken)` | 换票成功后，把后端 token 写入业务系统状态 |
+
+### 5.3 注册 SDK 路由
+
+在你的静态路由中加入：
 
 ```ts
-interface SsoUserInfo {
-  id?: number
-  username?: string
-  nickname?: string
-  phone?: string
-  email?: string
-  logo?: string
-  [key: string]: unknown
+import { getSsoRoutes } from 'sz-sso-client-web-sdk/vue';
+
+export const staticRouter = [
+  // 你的业务路由
+  ...getSsoRoutes(),
+];
+```
+
+SDK 默认提供两个路由：
+
+| 路由 | 作用 |
+| --- | --- |
+| `/sso-login` | SSO 登录回调页，也是业务系统触发 SSO 登录的入口 |
+| `/sso-forbidden` | SSO 登录成功但无权限时的兜底页 |
+
+### 5.4 加入路由白名单
+
+如果你的项目有路由守卫，需要把 SDK 路由加入白名单：
+
+```ts
+import {
+  SSO_CALLBACK_PATH,
+  SSO_FORBIDDEN_PATH,
+} from 'sz-sso-client-web-sdk/vue';
+
+export const LOGIN_WHITE_LIST = [
+  '/login',
+  SSO_CALLBACK_PATH,
+  SSO_FORBIDDEN_PATH,
+];
+```
+
+不加白名单时，常见现象是：
+
+- `/sso-login` 还没来得及处理 `ticket`，就被业务路由守卫拦回 `/login`。
+- 认证中心登录成功后，前端页面来回跳转。
+
+### 5.5 业务登录页跳转 `/sso-login`
+
+业务系统的登录页不需要自己拼认证中心地址，只需要跳 SDK 回调页：
+
+```ts
+router.push({
+  path: '/sso-login',
+  query: {
+    back: route.query.redirect || '/',
+  },
+});
+```
+
+SDK 会自动判断：
+
+| 当前 URL 状态 | SDK 行为 |
+| --- | --- |
+| 没有 `ticket` | 生成认证中心登录地址并跳转 |
+| 有 `ticket` | 调用后端 `/sso/doLoginByTicket` 换 token |
+| 后端返回 `O4031` | 跳转 `/sso-forbidden` |
+| 登录成功 | 执行 `onLoginSuccess`，再回到 `back` 地址 |
+
+### 5.6 退出登录
+
+退出登录由业务系统主动完成。推荐顺序：
+
+1. 调用 Client 后端 `/sso/logout`。
+2. 清理前端 token。
+3. 清理用户信息、菜单、按钮权限、动态路由。
+4. 断开 WebSocket 或其他长连接。
+5. 跳回业务登录页或首页。
+
+示例：
+
+```ts
+await logoutApi();
+userStore.setToken('');
+userStore.setUserInfo(null);
+authStore.clearAuth();
+websocket.close();
+router.replace('/login');
+```
+
+后端 demo 的退出接口是：
+
+```ts
+export const logoutApi = () => {
+  return http.post('/sso/logout');
+};
+```
+
+## 六、P0 最小联调清单
+
+完成 P0 后，按下面顺序验证。
+
+### 6.1 后端检查
+
+| 检查项 | 预期 |
+| --- | --- |
+| 后端启动成功 | 没有缺少 `SsoUserMappingService` 或 `SsoClientLoginAdapter` 的 Bean 错误 |
+| 访问 `/sso/isLogin` | 能返回 SDK 标准响应 |
+| 访问 `/sso/getSsoAuthUrl` | 返回的地址指向认证中心登录页 |
+| 配置 `server-url` | 能连通 SSO Server 后端 API |
+| 配置 `push-url` | 指向当前 Client 可被 SSO Server 访问的推送地址 |
+
+### 6.2 前端检查
+
+| 检查项 | 预期 |
+| --- | --- |
+| `/sso-login` 路由存在 | 访问时不会 404 |
+| `/sso-login` 在白名单中 | 不会被路由守卫拦截 |
+| 未带 `ticket` 访问 `/sso-login` | 自动跳认证中心 |
+| 带 `ticket` 回跳 `/sso-login` | 调用 Client 后端 `/sso/doLoginByTicket` |
+| `onLoginSuccess` 执行 | 前端 token 被写入 store |
+
+### 6.3 端到端检查
+
+最小成功路径：
+
+1. 清空浏览器本业务系统 token。
+2. 访问业务系统受保护页面。
+3. 前端跳到业务登录页或直接跳 `/sso-login`。
+4. SDK 跳到认证中心。
+5. 用户在认证中心登录。
+6. 认证中心回跳 `/sso-login?ticket=xxx&back=xxx`。
+7. 前端调用 `/api/sso/doLoginByTicket?ticket=xxx`。
+8. 后端返回包含 `accessToken` 的登录结果。
+9. 前端保存 token。
+10. 页面回到原始 `back` 地址。
+
+## 七、P1：角色与权限接入
+
+P0 跑通后，再接 P1。P1 的目标是让登录用户在本系统里拥有正确角色和权限。
+
+### 7.1 默认角色：`SsoClientRoleProvider`
+
+如果所有 SSO 登录用户都应该自动获得某些基础角色，可以实现：
+
+```java
+public interface SsoClientRoleProvider {
+
+    Collection<String> getDefaultRoleCodes();
 }
 ```
 
-## 依赖说明
+示例：
 
-运行时 dependencies 为空：
+```java
+@Service
+public class DemoSsoClientRoleProvider implements SsoClientRoleProvider {
 
-```json
-"dependencies": {}
+    @Override
+    public Collection<String> getDefaultRoleCodes() {
+        return List.of("common_user");
+    }
+}
 ```
 
-Peer dependencies：
+使用场景：
 
-| 依赖 | 用途 | 是否必须 |
+- SSO 登录用户默认拥有“普通用户”角色。
+- 新注册同步过来的用户需要一个基础角色才能进入系统。
+
+注意：
+
+- 默认角色适合放“基础可用权限”。
+- 不建议把高权限角色放入默认角色。
+
+### 7.2 Client 超管识别：`SsoRoleBindingService`
+
+SSO Server 可以维护某个用户是否是某个 Client 的超级管理员。Client 登录时，Starter 会查询并同步这个信息。
+
+如果你的本地系统需要把“Client 超管”绑定到本地角色，实现：
+
+```java
+public interface SsoRoleBindingService {
+
+    Collection<String> listRoleCodesByUserId(Long userId);
+
+    void bindSuperAdminRole(Long userId);
+
+    void unbindSuperAdminRole(Long userId);
+}
+```
+
+典型逻辑：
+
+| 方法 | 作用 |
+| --- | --- |
+| `listRoleCodesByUserId` | 查询本地用户当前角色 |
+| `bindSuperAdminRole` | 给本地用户绑定超管角色 |
+| `unbindSuperAdminRole` | 取消本地用户超管角色 |
+
+登录链路中，Starter 会通过 SSO 消息查询用户是否是当前 Client 超管。消息类型来自 core：
+
+```java
+QUERY_USER_ROLES
+```
+
+如果 SSO Server 返回该用户是 Client 超管，Starter 会调用 `bindSuperAdminRole`；否则会调用 `unbindSuperAdminRole`。
+
+### 7.3 业务代码判断是否超管
+
+登录完成后，Starter 会把超管状态写入 TokenSession。业务代码可以通过工具方法判断：
+
+```java
+boolean superAdmin = SsoClientUtil.isSuperAdmin();
+```
+
+适合用于：
+
+- 菜单过滤。
+- 操作权限判断。
+- 页面按钮权限判断。
+
+### 7.4 本地变更同步回 SSO Server
+
+如果你在 Client 本地修改了某个用户的超管状态，需要同步回 SSO Server，可以使用：
+
+```java
+SsoSyncHelper.syncSuperAdmin(centerId, true);
+SsoSyncHelper.syncSuperAdmin(centerId, false);
+```
+
+注意这里的 `centerId` 是 **SSO Server 用户 ID**，不是本地用户 ID。通常你需要先通过本地映射表找到对应的 SSO 用户 ID。
+
+## 八、P1：前端用户菜单
+
+Web SDK 提供了可选的 `SsoUserMenu` 组件，用于快速接入统一风格的用户菜单。
+
+菜单中的「账号与安全」「个人中心」不是普通外链。它们会先调用当前 Client 后端的 `/sso/getSsoPortalUrl`，由后端确认当前 Client 用户已登录、找到对应的 SSO 用户 ID，再向 SSO Server 申请一个 60 秒内有效、只能使用一次的 portal ticket。认证中心收到 `/portal-login?ticket=xxx&_back=/ucenter/applications` 后消费票据并写入认证中心登录态，最后进入目标页面。
+
+这样设计的原因是：Client 站点和认证中心站点可能使用不同域名、IP 或端口，浏览器 Cookie 不能天然共享。**不要依赖 `127.0.0.1:9800` 与 `127.0.0.1:3310`、域名与 IP、或不同子域之间的 Cookie 共享来判断认证中心是否登录**。产品化接入应显式走 portal ticket，登录态由认证中心自己写入。
+
+安全约束：
+
+| 约束 | 当前实现 |
+| --- | --- |
+| 票据来源 | 只能由已登录的 Client 后端申请 |
+| 用户身份 | 通过 `SsoUserMappingService.toServerUserId` 从本地用户映射到 SSO 用户 |
+| Client 权限 | SSO Server 会检查该用户是否允许从当前 Client 进入认证中心 |
+| 有效期 | portal ticket 默认 60 秒 |
+| 使用次数 | ticket 被认证中心消费后立即失效 |
+| 跳转范围 | 只允许 `/ucenter/applications`、`/ucenter/profile`、`/ucenter/password`、`/ucenter/login-log` |
+基础用法：
+
+```vue
+<template>
+  <SsoUserMenu
+    :display-name="userInfo.nickname"
+    :username="userInfo.username"
+    @logout="handleLogout"
+  />
+</template>
+
+<script setup lang="ts">
+import { SsoUserMenu } from 'sz-sso-client-web-sdk/vue';
+import 'sz-sso-client-web-sdk/style.css';
+
+const handleLogout = async () => {
+  await logoutApi();
+  userStore.setToken('');
+};
+</script>
+```
+
+更多交互规范、插槽和样式建议见：
+
+```text
+docs/sso-user-menu-integration.md
+```
+
+如果你的系统已经有成熟的头像菜单，可以不使用该组件，只保留 SDK 的登录回调能力。
+
+## 九、P2：扩展消息能力
+
+当 P0、P1 稳定后，再考虑 P2。
+
+SSO Server 与 Client 之间的扩展通讯基于 Sa-Token SSO message。当前已经落地的常见消息包括：
+
+| 消息 | 方向 | 作用 |
 | --- | --- | --- |
-| `vue` | Vue 适配层和组件 | 使用 `sz-sso-client-web-sdk/vue` 时需要 |
-| `vue-router` | `getSsoRoutes` / `SsoCallback` | 使用 Vue 路由接入时需要 |
-| `element-plus` | `SsoCallback` / `SsoForbidden` / `SsoUserMenu` UI | 使用内置 UI 时需要 |
+| `PUSH_REGISTER_USER` | Server -> Client | 推送 SSO 新注册用户到 Client |
+| `QUERY_USER_ROLES` | Client -> Server | 查询用户在当前 Client 下的角色或超管信息 |
+| `SYNC_USER_ROLES` | Client -> Server | 同步 Client 本地角色变化到 SSO Server |
+| `CREATE_PORTAL_TICKET` | Client -> Server | 为已登录 Client 用户申请认证中心个人门户一次性入口 |
 
-如果只使用 core：
+如果需要扩展新的消息，建议遵循：
 
-```ts
-import { createSsoClient } from 'sz-sso-client-web-sdk'
+1. 在 core 中定义清晰的消息类型和字段常量。
+2. Server 侧实现对应 message handler。
+3. Client 侧只做必要业务适配，不直接耦合 Server 数据库。
+4. 先用 demo 验证消息参数和返回结构，再沉淀到 SDK 文档。
+
+## 十、配置速查
+
+### 10.1 后端配置
+
+| 配置项 | 必填 | 示例 | 说明 |
+| --- | --- | --- | --- |
+| `sa-token.sso-client.client` | 是 | `sso-client3` | Client 标识 |
+| `sa-token.sso-client.server-url` | 是 | `http://127.0.0.1:5001/api/sso` | SSO Server 后端 API |
+| `sa-token.sso-client.auth-url` | 是 | `http://127.0.0.1:3310/login` | 认证中心前端登录页 |
+| `sa-token.sso-client.reg-logout-call` | 建议开启 | `true` | 是否注册单点登出回调 |
+| `sa-token.sso-client.push-url` | 建议配置 | `http://127.0.0.1:5001/api/sso/pushS` | 当前 Client 提供给 Server 的推送地址 |
+
+### 10.2 前端配置
+
+| 配置项 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `clientFlag` | 是 | 无 | Client 标识，对齐后端 `client` |
+| `ssoClientApiBaseUrl` | 是 | 无 | Client 后端 API 基础路径 |
+| `authCenterBaseUrl` | 是 | 无 | 认证中心前端地址 |
+| `callbackPath` | 否 | `/sso-login` | 登录回调路由 |
+| `portalRoutes.login` | 否 | `/login` | 认证中心登录页路径 |
+| `portalRoutes.security` | 否 | `/ucenter/password` | 认证中心账号与安全路径 |
+| `portalRoutes.applications` | 否 | `/ucenter/applications` | 认证中心个人中心/我的应用路径 |
+| `endpoints.loginByTicket` | 否 | `/sso/doLoginByTicket` | ticket 换 token 端点 |
+| `endpoints.portalUrl` | 否 | `/sso/getSsoPortalUrl` | 获取认证中心个人门户一次性入口 |
+| `successCode` | 否 | `0000` | 后端业务成功码 |
+| `fetchCredentials` | 否 | `same-origin` | fetch credentials 配置 |
+| `onLoginSuccess` | 是 | 无 | 换票成功后的业务回调 |
+
+## 十一、推荐目录改动清单
+
+如果你正在接入一个新的业务系统，通常会修改这些位置。
+
+### 11.1 Java 后端
+
+| 文件 | 动作 |
+| --- | --- |
+| `pom.xml` | 添加 `sz-sso-client-starter` 依赖 |
+| `application.yml` 或 profile 配置 | 增加 `sa-token.sso-client` 配置 |
+| 用户模块 Service | 增加 SSO 用户与本地用户映射查询或创建逻辑 |
+| 新增实现类 | 实现 `SsoUserMappingService` |
+| 新增实现类 | 实现 `SsoClientLoginAdapter` |
+| 可选实现类 | 实现 `SsoClientRoleProvider` |
+| 可选实现类 | 实现 `SsoRoleBindingService` |
+
+### 11.2 Vue 前端
+
+| 文件 | 动作 |
+| --- | --- |
+| `package.json` | 添加 `sz-sso-client-web-sdk` |
+| `main.ts` | 创建 `createSsoClient` 并注册 `createSsoPlugin` |
+| 静态路由文件 | 加入 `...getSsoRoutes()` |
+| 路由守卫或白名单配置 | 加入 `SSO_CALLBACK_PATH`、`SSO_FORBIDDEN_PATH` |
+| 登录页 | SSO 登录按钮跳 `/sso-login?back=xxx` |
+| 退出逻辑 | 调 `/sso/logout` 后清理本地 store、路由、权限、连接 |
+| 可选布局组件 | 接入 `SsoUserMenu` |
+
+## 十二、常见问题
+
+### 12.1 前端一直在登录页和 `/sso-login` 之间跳转
+
+优先检查：
+
+- `/sso-login` 是否加入路由白名单。
+- `getSsoRoutes()` 是否注册到静态路由。
+- 业务登录页是否正确传递 `back`。
+- 认证中心回跳地址是否是业务前端地址，而不是后端地址。
+
+### 12.2 `/sso/doLoginByTicket` 返回失败
+
+优先检查：
+
+- `ticket` 是否已经过期或被重复使用。
+- 后端 `server-url` 是否正确。
+- `client` 是否与 SSO Server 登记一致。
+- `SsoUserMappingService.toClientUserId` 是否返回本地用户 ID。
+- 本地用户是否被禁用、删除或缺少必要状态。
+
+### 12.3 前端保存 token 后仍然无权限
+
+优先检查：
+
+- `onLoginSuccess` 是否确实写入了业务系统原本使用的 token store。
+- 后端返回字段是否叫 `accessToken`。
+- 菜单、角色、按钮权限是否在登录后重新拉取。
+- 动态路由是否在 SSO 登录成功后重新挂载。
+
+### 12.4 退出后又自动登录回来
+
+优先检查：
+
+- 是否只清了本地 token，没有调用 `/sso/logout`。
+- 是否没有清理菜单权限和动态路由。
+- 是否存在未关闭的 WebSocket 或轮询把旧状态写回 store。
+- 认证中心会话仍然有效时，业务侧是否设计为自动 SSO 登录。
+
+### 12.5 `push-url` 应该填什么
+
+`push-url` 是 SSO Server 调用当前 Client 的地址。demo 中填写：
+
+```yaml
+push-url: http://127.0.0.1:5001/api/sso/pushS
 ```
 
-则不需要引入 Vue、Vue Router、Element Plus。
+不要把它理解成 Starter 自动提供的 Sa-Token Client 消息入口。
 
-## 验证命令
+`/sso/pushC` 是 Starter 自动端点，用于接收 Sa-Token Client 消息。上面的登记地址则是当前系统对外登记给 Server 使用的推送地址，实际项目里通常会带网关前缀、服务前缀或部署域名。
+
+## 十三、最小可运行示例对照
+
+### 13.1 Java demo 关键位置
+
+| 位置 | 作用 |
+| --- | --- |
+| `config/local/sa-token.yml` | SSO Client 后端配置 |
+| `sz-service/sz-service-admin/pom.xml` | Starter 依赖示例 |
+| `SsoClientLoginAdapterImpl` | 登录用户构建与登录结果生成 |
+| `SysUserMappingServiceImpl` | SSO 用户与本地用户映射 |
+| `SsoClientRoleProviderImpl` | 默认角色示例 |
+| `SsoRoleBindingServiceImpl` | Client 超管角色绑定示例 |
+
+### 13.2 Web demo 关键位置
+
+| 位置 | 作用 |
+| --- | --- |
+| `package.json` | 本地 Web SDK 依赖 |
+| `src/main.ts` | `createSsoClient` 与插件注册 |
+| `src/router/modules/staticRouter.ts` | `getSsoRoutes()` 接入 |
+| `src/config/index.ts` | SSO 路由白名单 |
+| `src/views/login/index.vue` | 业务登录页跳 `/sso-login` |
+| `src/api/modules/system/login.ts` | `/sso/logout` 调用 |
+| `.env.development` | 前端环境变量示例 |
+
+## 十四、验证与构建建议
+
+本轮文档只要求说明接入方式，不强制构建。但实际接入时建议按下面顺序验证：
+
+### 14.1 后端
 
 ```bash
-pnpm run type-check
-pnpm run build
+mvn compile -DskipTests
 ```
+
+如果是多模块项目，建议只编译接入模块及其依赖：
+
+```bash
+mvn -pl <your-client-module> -am compile -DskipTests
+```
+
+### 14.2 前端
+
+```bash
+pnpm install
+pnpm type-check
+pnpm build
+```
+
+如果你只是本地联调，也可以先启动开发服务：
+
+```bash
+pnpm dev
+```
+
+## 十五、后续可讨论的 SDK 优化点
+
+当前文档按现有代码能力编写。后续如果要继续优化 SDK，可以讨论这些方向：
+
+1. 后端 Starter 增加更明确的启动期配置校验，提前提示缺少 `client`、`server-url`、`auth-url`。
+2. 后端 Starter 对常见映射失败、ticket 失败、Client 不匹配提供更友好的错误码和排查信息。
+3. Web SDK 增加更完整的 TypeScript 类型示例，让 `onLoginSuccess` 的返回结构更容易约束。
+4. Web SDK 增加退出辅助函数，但仍保留业务方清理 store、路由、权限、WebSocket 的控制权。
+5. 文档站后续可以将本文拆为“5 分钟快速开始”“Spring Boot 接入”“Vue 接入”“权限扩展”“故障排查”多个页面。
+
+## 十六、接入结论
+
+新业务系统接入 sz-sso 时，请先完成这 6 件事：
+
+1. 后端引入 `sz-sso-client-starter`。
+2. 后端配置 `sa-token.sso-client`。
+3. 后端实现 `SsoUserMappingService`。
+4. 后端实现 `SsoClientLoginAdapter`。
+5. 前端注册 `createSsoClient`、`createSsoPlugin`、`getSsoRoutes()`。
+6. 前端登录页跳 `/sso-login`，退出时调用 `/sso/logout` 并清理本地状态。
+
+完成后，你就拥有了最小可用的统一登录能力；再按业务需要逐步补充默认角色、Client 超管、用户菜单和消息扩展。

@@ -72,7 +72,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ElIcon, ElPopover, ElMessageBox } from 'element-plus'
+import { ElIcon, ElPopover, ElMessageBox, ElMessage } from 'element-plus'
 import { Grid, Lock, SwitchButton, TopRight, User } from '@element-plus/icons-vue'
 import { useSsoClient } from './composables'
 
@@ -127,14 +127,30 @@ const popperOptions = {
   ],
 }
 
+async function openPortal(targetPath: string) {
+  const portalWindow = window.open('about:blank', '_blank')
+  try {
+    const url = await client.getSsoPortalEntryUrl(targetPath)
+    if (portalWindow) {
+      portalWindow.opener = null
+      portalWindow.location.href = url
+      return
+    }
+    window.location.href = url
+  } catch (error: any) {
+    portalWindow?.close()
+    ElMessage.error(error?.message || '无法进入认证中心')
+  }
+}
+
 function goAccountSecurity() {
   const targetPath = props.securityPath || client.getPortalRoutes().security
-  window.open(client.getSsoPortalUrl(targetPath), '_blank', 'noopener,noreferrer')
+  void openPortal(targetPath)
 }
 
 function goPortalHome() {
   const targetPath = props.applicationsPath || client.getPortalRoutes().applications
-  window.open(client.getSsoPortalUrl(targetPath), '_blank', 'noopener,noreferrer')
+  void openPortal(targetPath)
 }
 
 function handleLogout() {
