@@ -343,6 +343,7 @@ const ssoClient = createSsoClient({
   clientFlag: import.meta.env.VITE_SSO_CLIENT_FLAG || 'sso-client3',
   ssoClientApiBaseUrl: import.meta.env.VITE_API_CONTEXT_PATH || '/api',
   authCenterBaseUrl: import.meta.env.VITE_UCENTER_URL,
+  defaultBackUrl: '/home/index',
   onLoginSuccess: data => {
     userStore.setToken(data.accessToken);
   },
@@ -358,6 +359,7 @@ app.use(createSsoPlugin(ssoClient));
 | `clientFlag` | `sso-client3` | 与后端 `sa-token.sso-client.client` 保持一致 |
 | `ssoClientApiBaseUrl` | `/api` | Web SDK 请求 Client 后端的基础路径 |
 | `authCenterBaseUrl` | `http://127.0.0.1:3310` | 认证中心前端地址 |
+| `defaultBackUrl` | `/home/index` | 登录成功后没有明确 `back` 时的默认落地页 |
 | `onLoginSuccess` | `userStore.setToken(data.accessToken)` | 换票成功后，把后端 token 写入业务系统状态 |
 
 ### 5.3 注册 SDK 路由
@@ -402,9 +404,37 @@ export const LOGIN_WHITE_LIST = [
 - `/sso-login` 还没来得及处理 `ticket`，就被业务路由守卫拦回 `/login`。
 - 认证中心登录成功后，前端页面来回跳转。
 
-### 5.5 业务登录页跳转 `/sso-login`
+### 5.5 接入 Client 登录页
 
-业务系统的登录页不需要自己拼认证中心地址，只需要跳 SDK 回调页：
+推荐直接使用 SDK 提供的 `SsoClientLoginPage`。业务系统只需要把自己的本地登录表单作为默认 slot 放进去；SSO 按钮、`back` 参数安全处理、跳转 `/sso-login` 都由 SDK 完成。
+
+最小接入：
+
+```vue
+<template>
+  <SsoClientLoginPage app-name="业务系统">
+    <LocalLoginForm />
+  </SsoClientLoginPage>
+</template>
+
+<script setup lang="ts">
+import { SsoClientLoginPage } from 'sz-sso-client-web-sdk/vue';
+import LocalLoginForm from './components/LocalLoginForm.vue';
+</script>
+```
+
+只使用统一认证中心登录，不提供本地账号密码登录：
+
+```vue
+<template>
+  <SsoClientLoginPage
+    app-name="业务系统"
+    :show-local-login="false"
+  />
+</template>
+```
+
+如果你已经有完全自定义的登录页，也可以不使用 `SsoClientLoginPage`，只跳 SDK 回调页：
 
 ```ts
 router.push({
@@ -415,7 +445,7 @@ router.push({
 });
 ```
 
-SDK 会自动判断：
+`/sso-login` 会自动判断：
 
 | 当前 URL 状态 | SDK 行为 |
 | --- | --- |
@@ -423,6 +453,17 @@ SDK 会自动判断：
 | 有 `ticket` | 调用后端 `/sso/doLoginByTicket` 换 token |
 | 后端返回 `O4031` | 跳转 `/sso-forbidden` |
 | 登录成功 | 执行 `onLoginSuccess`，再回到 `back` 地址 |
+
+可扩展点：
+
+| 能力 | 推荐方式 |
+| --- | --- |
+| 本地账号密码登录 | 默认 slot 放业务自己的登录表单 |
+| 主题切换 | `theme` slot |
+| 自定义 Logo | `logo` prop 或 `logo` slot |
+| 自定义插画 | `illustration` prop 或 `illustration` slot |
+| 登录前埋点/确认 | `beforeSsoLogin` |
+| 完全接管 SSO 按钮 | `autoRedirect=false` 后监听 `sso-login` |
 
 ### 5.6 退出登录
 

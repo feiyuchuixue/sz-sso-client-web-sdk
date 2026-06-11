@@ -137,7 +137,7 @@ const props = withDefaults(defineProps<Props>(), {
   localLoginTitle: "本地登录",
   showLocalLogin: true,
   autoRedirect: true,
-  defaultBackUrl: "/",
+  defaultBackUrl: "",
   loginPaths: () => ["/login", "/sso-login"],
   logo: "",
   illustration: "",
@@ -211,21 +211,23 @@ function getBackFromRoute(): string | undefined {
 }
 
 function resolveBackUrl(): string {
+  const fallback = props.defaultBackUrl || client.getConfig().defaultBackUrl || "/";
+
   if (props.resolveBackUrl) {
-    return resolveSafeBackUrl(props.resolveBackUrl(), props.defaultBackUrl);
+    return resolveSafeBackUrl(props.resolveBackUrl(), fallback);
   }
 
   const fromQuery = getBackFromRoute();
   if (typeof fromQuery === "string") {
-    return resolveSafeBackUrl(fromQuery, props.defaultBackUrl);
+    return resolveSafeBackUrl(fromQuery, fallback);
   }
 
   const current = router.currentRoute.value.fullPath;
   if (current && current !== route.fullPath) {
-    return resolveSafeBackUrl(current, props.defaultBackUrl);
+    return resolveSafeBackUrl(current, fallback);
   }
 
-  return props.defaultBackUrl;
+  return fallback;
 }
 
 async function handleSsoLogin() {

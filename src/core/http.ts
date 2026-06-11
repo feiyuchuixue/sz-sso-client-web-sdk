@@ -17,11 +17,27 @@ function trimLeadingSlash(value: string): string {
   return value.replace(/^\/+/, "");
 }
 
+function normalizePathPart(value: string): string {
+  return trimLeadingSlash(trimTrailingSlash(value.trim()));
+}
+
+function joinPath(...parts: string[]): string {
+  return parts
+    .map(normalizePathPart)
+    .filter(Boolean)
+    .join("/");
+}
+
 function joinUrl(baseUrl: string, path: string): string {
   if (ABSOLUTE_URL_RE.test(path)) return path;
   const base = trimTrailingSlash(baseUrl);
   const next = trimLeadingSlash(path);
   return next ? `${base}/${next}` : base;
+}
+
+function buildApiUrl(baseUrl: string, apiPrefix: string, endpoint: string): string {
+  if (ABSOLUTE_URL_RE.test(endpoint)) return endpoint;
+  return joinUrl(baseUrl, joinPath(apiPrefix, endpoint));
 }
 
 function appendParams(url: string, params?: SsoRequestOptions["params"]): string {
@@ -78,7 +94,7 @@ export class SsoHttpClient<U = SsoUserInfo> {
 
   async loginByTicket(ticket: string): Promise<SsoLoginResult<U>> {
     return this.request<SsoLoginResult<U>>({
-      url: joinUrl(this.config.ssoClientApiBaseUrl, `${this.config.apiPrefix}${this.config.endpoints.loginByTicket}`),
+      url: buildApiUrl(this.config.ssoClientApiBaseUrl, this.config.apiPrefix, this.config.endpoints.loginByTicket),
       method: "GET",
       params: { ticket },
       timeout: this.config.httpTimeout,
@@ -88,7 +104,7 @@ export class SsoHttpClient<U = SsoUserInfo> {
 
   async getPortalUrl(targetPath: string): Promise<string> {
     return this.request<string>({
-      url: joinUrl(this.config.ssoClientApiBaseUrl, `${this.config.apiPrefix}${this.config.endpoints.portalUrl}`),
+      url: buildApiUrl(this.config.ssoClientApiBaseUrl, this.config.apiPrefix, this.config.endpoints.portalUrl),
       method: "GET",
       params: { targetPath },
       timeout: this.config.httpTimeout,
