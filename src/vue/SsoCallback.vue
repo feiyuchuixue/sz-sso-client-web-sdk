@@ -70,7 +70,7 @@ const LOGIN_PATHS = ["/login", "/sso-login"];
 function isLoginPath(url: string): boolean {
   if (!url) return false;
   try {
-    const pathname = new URL(url).pathname;
+    const pathname = new URL(url, window.location.origin).pathname;
     return LOGIN_PATHS.some(
       (p) =>
         pathname === p ||
@@ -82,6 +82,31 @@ function isLoginPath(url: string): boolean {
     return LOGIN_PATHS.some(
       (p) => url === p || url.startsWith(p + "/") || url.startsWith(p + "?"),
     );
+  }
+}
+
+function decodeQueryValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function resolveSafeBackUrl(raw: string | undefined, fallback = "/"): string {
+  if (!raw) return fallback;
+
+  const value = decodeQueryValue(raw).trim();
+  if (!value) return fallback;
+  if (value.startsWith("//")) return fallback;
+  if (/^(javascript|data|vbscript):/i.test(value)) return fallback;
+
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.origin !== window.location.origin) return fallback;
+    return `${url.pathname}${url.search}${url.hash}` || fallback;
+  } catch {
+    return fallback;
   }
 }
 
@@ -126,12 +151,12 @@ async function handleCallback() {
       // 展示成功状态后跳转：600ms = ✓图标入场动画（0.25s弹性）完整播完 + 约0.35s用户可感知停留
       await new Promise((resolve) => setTimeout(resolve, 600));
 
-      // 确定跳转目标：back 解码后若指向登录页则兜底跳首页
-      const target = back ? decodeURIComponent(back) : "/";
-      window.location.href = isLoginPath(target) ? "/" : target;
+      // 确定跳转目标：仅允许当前站点内相对地址，并用 replace 避免 ticket 留在历史记录
+      const target = resolveSafeBackUrl(back);
+      window.location.replace(isLoginPath(target) ? "/" : target);
     } else {
       // 无 ticket：跳转到认证中心
-      const target = back ? decodeURIComponent(back) : undefined;
+      const target = back ? resolveSafeBackUrl(back) : undefined;
       await client.goSsoLogin(target);
       // goSsoLogin 执行 window.location.href，页面已离开，以下代码不会运行
     }
@@ -163,7 +188,7 @@ function retry() {
   errorMsg.value = "";
   hasTicket.value = false;
   client
-    .goSsoLogin(back ? decodeURIComponent(back) : undefined)
+    .goSsoLogin(back ? resolveSafeBackUrl(back) : undefined)
     .catch((e: any) => {
       status.value = "error";
       errorMsg.value = e?.message || "重试失败，请稍后再试";
