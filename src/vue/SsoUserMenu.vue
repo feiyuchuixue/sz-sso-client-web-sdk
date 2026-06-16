@@ -56,12 +56,24 @@
           </button>
         </div>
 
-        <div class="sso-user-menu__section sso-user-menu__section--footer">
-          <button type="button" class="sso-user-menu__item" @click="handleLogout">
+        <div v-if="hasLogoutAction" class="sso-user-menu__section sso-user-menu__section--footer">
+          <button v-if="logoutActions.sessionLogout" type="button" class="sso-user-menu__item" @click="handleSessionLogout">
             <span class="sso-user-menu__item-icon sso-user-menu__item-icon--plain">
               <el-icon><SwitchButton /></el-icon>
             </span>
             <span class="sso-user-menu__item-title">退出登录</span>
+          </button>
+          <button v-if="logoutActions.deviceSignout" type="button" class="sso-user-menu__item" @click="handleDeviceSignout">
+            <span class="sso-user-menu__item-icon sso-user-menu__item-icon--plain">
+              <el-icon><SwitchButton /></el-icon>
+            </span>
+            <span class="sso-user-menu__item-title">退出当前设备</span>
+          </button>
+          <button v-if="logoutActions.signout" type="button" class="sso-user-menu__item" @click="handleSignout">
+            <span class="sso-user-menu__item-icon sso-user-menu__item-icon--plain">
+              <el-icon><SwitchButton /></el-icon>
+            </span>
+            <span class="sso-user-menu__item-title">退出所有应用</span>
           </button>
         </div>
       </div>
@@ -99,12 +111,20 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   /** 点击「个人信息」菜单项时触发（client 监听并打开弹窗） */
   'personal-info-click': []
-  /** 用户确认退出后触发（client 监听并执行 store.clear、关闭 socket、跳转登录页等清理） */
+  /** 用户确认退出当前 Client 会话后触发。 */
   'logout': []
+  /** 用户确认退出当前设备后触发。 */
+  'device-signout': []
+  /** 用户确认退出所有应用后触发。 */
+  'signout': []
 }>()
 
 // ---- SSO Client ----
 const client = useSsoClient()
+const logoutActions = computed(() => client.getLogoutActions())
+const hasLogoutAction = computed(() => {
+  return logoutActions.value.sessionLogout || logoutActions.value.deviceSignout || logoutActions.value.signout
+})
 
 const displayNameText = computed(() => props.displayName || props.username || '当前用户')
 const summaryTitle = computed(() => {
@@ -153,14 +173,36 @@ function goPortalHome() {
   void openPortal(targetPath)
 }
 
-function handleLogout() {
-  ElMessageBox.confirm('您是否确认退出登录?', '温馨提示', {
+type LogoutEmitName = 'logout' | 'device-signout' | 'signout'
+
+function confirmLogout(message: string, emitName: LogoutEmitName) {
+  ElMessageBox.confirm(message, '温馨提示', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning',
   }).then(() => {
-    emit('logout')
+    if (emitName === 'logout') {
+      emit('logout')
+      return
+    }
+    if (emitName === 'device-signout') {
+      emit('device-signout')
+      return
+    }
+    emit('signout')
   })
+}
+
+function handleSessionLogout() {
+  confirmLogout('您是否确认退出登录?', 'logout')
+}
+
+function handleDeviceSignout() {
+  confirmLogout('将退出当前设备上的所有已接入应用，其他设备不受影响。是否继续?', 'device-signout')
+}
+
+function handleSignout() {
+  confirmLogout('将退出该账号所有设备上的所有已接入应用。是否继续?', 'signout')
 }
 </script>
 

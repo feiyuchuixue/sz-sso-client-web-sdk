@@ -2,15 +2,23 @@ import type {
   SsoClientConfig,
   SsoClientOptions,
   SsoLoginResult,
+  SsoLogoutActions,
   SsoPortalRoutes,
   SsoUserInfo,
 } from "./types";
 import { SsoHttpClient } from "./http";
+import { normalizeTicketLoginError } from "./errors";
 
 const DEFAULT_PORTAL_ROUTES: SsoPortalRoutes = {
   login: "/login",
   security: "/ucenter/password",
   applications: "/ucenter/applications",
+};
+
+const DEFAULT_LOGOUT_ACTIONS: SsoLogoutActions = {
+  sessionLogout: true,
+  deviceSignout: true,
+  signout: true,
 };
 
 const DEFAULTS = {
@@ -81,6 +89,11 @@ export class SsoClient<U = SsoUserInfo> {
         ...DEFAULT_PORTAL_ROUTES,
         ...options.portalRoutes,
       },
+      logoutActions: {
+        ...DEFAULT_LOGOUT_ACTIONS,
+        ...options.logoutActions,
+      },
+      errorMessages: options.errorMessages ?? {},
       onLoginSuccess: options.onLoginSuccess,
       onLoginError: options.onLoginError,
     };
@@ -113,9 +126,13 @@ export class SsoClient<U = SsoUserInfo> {
       throw new Error("[sso-sdk] ticket is required.");
     }
 
-    const result = await this.httpClient.loginByTicket(ticket);
-    await this.config.onLoginSuccess(result);
-    return result;
+    try {
+      const result = await this.httpClient.loginByTicket(ticket);
+      await this.config.onLoginSuccess(result);
+      return result;
+    } catch (error) {
+      throw normalizeTicketLoginError(error, this.config.errorMessages);
+    }
   }
 
   /** 获取认证中心页面的直接 URL。仅适合认证中心已有登录态的场景。 */
@@ -136,6 +153,10 @@ export class SsoClient<U = SsoUserInfo> {
 
   getPortalRoutes(): Readonly<SsoPortalRoutes> {
     return this.config.portalRoutes;
+  }
+
+  getLogoutActions(): Readonly<SsoLogoutActions> {
+    return this.config.logoutActions;
   }
 
   getConfig(): Readonly<SsoClientConfig<U>> {

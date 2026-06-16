@@ -2,6 +2,8 @@
 // sz-sso-client-web-sdk 类型定义
 // ============================================================
 
+import type { SsoCallbackErrorType } from "./errors";
+
 /**
  * 用户配置接口（createSsoClient 入参）
  *
@@ -75,6 +77,13 @@ export interface SsoClientOptions<U = SsoUserInfo> {
   /** 认证中心页面路径覆盖。 */
   portalRoutes?: Partial<SsoPortalRoutes>;
   /**
+   * 用户菜单退出动作开关，默认三项全部启用。
+   * Client 可按自身后端实现选择隐藏部分动作。
+   */
+  logoutActions?: Partial<SsoLogoutActions>;
+  /** SSO 回调错误默认文案覆盖。 */
+  errorMessages?: Partial<Record<SsoCallbackErrorType, string>>;
+  /**
    * 指定 SSO 认证中心使用的主题，与 Client App 保持一致。
    * - `'light'`：强制明亮模式
    * - `'dark'`：强制暗黑模式
@@ -111,6 +120,8 @@ export interface SsoClientConfig<U = SsoUserInfo> {
   fetchCredentials: RequestCredentials;
   endpoints: SsoEndpoints;
   portalRoutes: SsoPortalRoutes;
+  logoutActions: SsoLogoutActions;
+  errorMessages: Partial<Record<SsoCallbackErrorType, string>>;
   onLoginSuccess: (data: SsoLoginResult<U>) => void | Promise<void>;
   onLoginError?: (error: unknown) => void;
 }
@@ -139,6 +150,16 @@ export interface SsoPortalRoutes {
   login: string;
   security: string;
   applications: string;
+}
+
+/** 用户菜单可展示的退出动作。 */
+export interface SsoLogoutActions {
+  /** 当前 Client 本地会话退出，对应 POST /sso/session/logout。 */
+  sessionLogout: boolean;
+  /** 当前设备上的所有 SSO 应用退出，对应 POST /sso/signout/device。 */
+  deviceSignout: boolean;
+  /** 当前账号所有设备、所有 SSO 应用退出，对应 POST /sso/signout。 */
+  signout: boolean;
 }
 
 /**

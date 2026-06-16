@@ -4,6 +4,13 @@
 // ============================================================
 
 export { SsoClient, createSsoClient, SSO_CALLBACK_PATH } from "./core/client";
+export {
+  SsoCallbackError,
+  SSO_CALLBACK_ERROR_MESSAGES,
+  normalizeSsoServerError,
+  normalizeTicketLoginError,
+} from "./core/errors";
+export type { SsoCallbackErrorType } from "./core/errors";
 
 export type {
   SsoClientOptions,
@@ -15,4 +22,5 @@ export type {
   SsoRequestOptions,
   SsoEndpoints,
   SsoPortalRoutes,
+  SsoLogoutActions,
 } from "./core/types";

@@ -56,10 +56,9 @@ import { ElIcon, ElButton } from "element-plus";
 import { CircleCheck, CircleClose } from "@element-plus/icons-vue";
 import { useSsoClient } from "./composables";
 import SsoLogo from "./SsoLogo.vue";
+import { SsoCallbackError } from "../core/errors";
 
 defineOptions({ name: "SsoCallback" });
-
-const SSO_CLIENT_FORBIDDEN_CODE = "O4031";
 
 // ---- 类型 ----
 type Status = "loading" | "success" | "error";
@@ -161,7 +160,7 @@ async function handleCallback() {
       // goSsoLogin 执行 window.location.href，页面已离开，以下代码不会运行
     }
   } catch (e: any) {
-    if (e?.code === SSO_CLIENT_FORBIDDEN_CODE) {
+    if (e?.type === "CLIENT_FORBIDDEN") {
       // 无权限：跳转到独立无权限页
       router.replace({
         path: "/sso-forbidden",
@@ -173,6 +172,7 @@ async function handleCallback() {
     } else {
       status.value = "error";
       errorMsg.value =
+        (e instanceof SsoCallbackError ? e.message : "") ||
         e?.message ||
         e?.msg ||
         (typeof e === "string" ? e : "登录失败，请稍后重试");
