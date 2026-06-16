@@ -194,15 +194,15 @@ function confirmLogout(message: string, emitName: LogoutEmitName) {
 }
 
 function handleSessionLogout() {
-  confirmLogout('您是否确认退出登录?', 'logout')
+  confirmLogout('是否退出当前应用？', 'logout')
 }
 
 function handleDeviceSignout() {
-  confirmLogout('将退出当前设备上的所有已接入应用，其他设备不受影响。是否继续?', 'device-signout')
+  confirmLogout('将退出当前设备上的已接入业务应用，认证中心登录态不受影响。是否继续？', 'device-signout')
 }
 
 function handleSignout() {
-  confirmLogout('将退出该账号所有设备上的所有已接入应用。是否继续?', 'signout')
+  confirmLogout('将退出该账号所有设备上的已接入业务应用。是否继续？', 'signout')
 }
 </script>
 
